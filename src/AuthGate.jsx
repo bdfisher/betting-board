@@ -10,8 +10,10 @@ export default function AuthGate({ children }) {
   // undefined = still checking; null = signed out; object = signed in
   const [session, setSession] = useState(isSupabaseConfigured ? undefined : null);
   const [email, setEmail] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | sending | sent | error
+  const [password, setPassword] = useState("");
+  const [status, setStatus] = useState("idle"); // idle | submitting | checkEmail | error
   const [errorMsg, setErrorMsg] = useState("");
+  const [authMode, setAuthMode] = useState("sign-in"); // sign-in | sign-up
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -32,24 +34,34 @@ export default function AuthGate({ children }) {
   // No backend configured → run local-only, no login required.
   if (!isSupabaseConfigured) return children;
 
-  async function sendLink(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     const addr = email.trim();
-    if (!addr) return;
-    setStatus("sending");
+    const pass = password;
+    if (!addr || !pass) return;
+    setStatus("submitting");
     setErrorMsg("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email: addr,
-      options: {
-        // Return to this exact app URL after the link is clicked.
-        emailRedirectTo: window.location.origin + import.meta.env.BASE_URL,
-      },
-    });
-    if (error) {
-      setStatus("error");
-      setErrorMsg(error.message);
+
+    if (authMode === "sign-in") {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: addr,
+        password: pass,
+      });
+      if (error) {
+        setStatus("error");
+        setErrorMsg(error.message);
+      }
     } else {
-      setStatus("sent");
+      const { data, error } = await supabase.auth.signUp({
+        email: addr,
+        password: pass,
+      });
+      if (error) {
+        setStatus("error");
+        setErrorMsg(error.message);
+      } else if (!data.session) {
+        setStatus("checkEmail");
+      }
     }
   }
 
@@ -70,36 +82,73 @@ export default function AuthGate({ children }) {
             <p className="mt-1 text-sm text-[#6272a4]">Sign in to sync your board across devices.</p>
           </div>
 
-          {status === "sent" ? (
-            <div className="bg-[#343746] border border-[#50fa7b]/40 rounded-lg p-4 text-sm text-center">
-              <p className="text-[#50fa7b] font-medium">Check your email</p>
-              <p className="mt-1 text-[#6272a4]">
-                We sent a sign-in link to <span className="text-[#f8f8f2]">{email.trim()}</span>.
-                Open it on this device to continue.
-              </p>
+          <div className="space-y-4">
+            <div className="bg-[#343746] border border-[#44475a] rounded-lg p-4 text-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-lg font-semibold text-[#f8f8f2]">
+                    {authMode === "sign-in" ? "Sign in" : "Create account"}
+                  </p>
+                  <p className="mt-1 text-[#6272a4] text-sm">
+                    {authMode === "sign-in"
+                      ? "Use your email and password to access your synced board."
+                      : "Create a new account with email and password."}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode(authMode === "sign-in" ? "sign-up" : "sign-in");
+                    setErrorMsg("");
+                    setStatus("idle");
+                  }}
+                  className="text-xs font-semibold text-[#bd93f9] hover:text-[#ff79c6]"
+                >
+                  {authMode === "sign-in" ? "Create account" : "Sign in"}
+                </button>
+              </div>
             </div>
-          ) : (
-            <form onSubmit={sendLink} className="space-y-3">
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]"
-              />
-              <button
-                type="submit"
-                disabled={status === "sending" || !email.trim()}
-                className="w-full rounded-lg px-3 py-2.5 text-sm font-medium bg-[#bd93f9] text-[#282a36] disabled:bg-[#21222c] disabled:text-[#44475a]"
-              >
-                {status === "sending" ? "Sending…" : "Email me a sign-in link"}
-              </button>
-              {status === "error" && (
-                <p className="text-xs text-[#ff5555]">{errorMsg || "Something went wrong. Try again."}</p>
-              )}
-            </form>
-          )}
+
+            {status === "checkEmail" ? (
+              <div className="bg-[#343746] border border-[#50fa7b]/40 rounded-lg p-4 text-sm text-center">
+                <p className="text-[#50fa7b] font-medium">Check your email</p>
+                <p className="mt-1 text-[#6272a4]">
+                  We sent a confirmation email to <span className="text-[#f8f8f2]">{email.trim()}</span>. Follow the link to finish signing up.
+                </p>
+              </div>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-3">
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]"
+                />
+                <input
+                  type="password"
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]"
+                />
+                <button
+                  type="submit"
+                  disabled={status === "submitting" || !email.trim() || !password}
+                  className="w-full rounded-lg px-3 py-2.5 text-sm font-medium bg-[#bd93f9] text-[#282a36] disabled:bg-[#21222c] disabled:text-[#44475a]"
+                >
+                  {status === "submitting"
+                    ? authMode === "sign-in" ? "Signing in…" : "Creating account…"
+                    : authMode === "sign-in" ? "Sign in" : "Sign up"}
+                </button>
+                {status === "error" && (
+                  <p className="text-xs text-[#ff5555]">{errorMsg || "Something went wrong. Try again."}</p>
+                )}
+              </form>
+            )}
+          </div>
         </div>
       </div>
     );
