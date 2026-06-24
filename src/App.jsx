@@ -367,6 +367,7 @@ export default function BetBoard() {
   const [exportJson, setExportJson] = useState("");
   const [importJson, setImportJson] = useState("");
   const [importError, setImportError] = useState("");
+  const [sourceExportOpen, setSourceExportOpen] = useState(false);
 
   // add flow state
   const [selectedSport, setSelectedSport] = useState(null);
@@ -1134,35 +1135,6 @@ export default function BetBoard() {
               </div>
             </div>
 
-            <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Export sources</div>
-                  <p className="text-sm text-[#6272a4]">Copy your source ratings for backup or import into a new account.</p>
-                </div>
-                <button onClick={copyExportToClipboard}
-                  className="rounded-lg px-3 py-2 text-sm font-medium bg-[#bd93f9] text-[#282a36]">
-                  Copy export
-                </button>
-              </div>
-              <textarea readOnly value={exportJson} rows={6}
-                className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]" />
-
-              <div className="pt-3 border-t border-[#44475a] space-y-2">
-                <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Import sources</div>
-                <textarea value={importJson} onChange={(e) => setImportJson(e.target.value)}
-                  autoCapitalize="off" autoCorrect="off" spellCheck={false}
-                  placeholder="Paste exported sources JSON here"
-                  rows={6}
-                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4] text-[#f8f8f2]" />
-                {importError && <p className="text-xs text-[#ff5555]">{importError}</p>}
-                <button onClick={importSources} disabled={!importJson.trim()}
-                  className="w-full rounded-lg px-3 py-2 text-sm font-medium bg-[#bd93f9] text-[#282a36] disabled:bg-[#21222c] disabled:text-[#44475a]">
-                  Import sources
-                </button>
-              </div>
-            </div>
-
             <div className="space-y-2">
               {sources.length === 0 ? (
                 <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-4 text-center">
@@ -1228,6 +1200,46 @@ export default function BetBoard() {
                     </div>
                   );
                 })
+              )}
+            </div>
+
+            <div className="bg-[#343746] border border-[#44475a] rounded-lg overflow-hidden">
+              <button
+                type="button"
+                onClick={() => setSourceExportOpen((open) => !open)}
+                className="w-full flex items-center justify-between px-3 py-3 text-sm font-semibold text-[#f8f8f2] hover:bg-[#2a2d44]"
+              >
+                <span>Source import/export</span>
+                <span className="text-[#6272a4]">{sourceExportOpen ? "Hide" : "Show"}</span>
+              </button>
+              {sourceExportOpen && (
+                <div className="border-t border-[#44475a] p-3 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Export</div>
+                      <p className="text-xs text-[#6272a4]">Copy a compact JSON export of your sources.</p>
+                    </div>
+                    <button onClick={copyExportToClipboard}
+                      className="rounded-lg px-3 py-2 text-xs font-semibold bg-[#bd93f9] text-[#282a36]">
+                      Copy export
+                    </button>
+                  </div>
+                  <textarea readOnly value={exportJson} rows={4}
+                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-xs text-[#f8f8f2]" />
+                  <div className="space-y-2">
+                    <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Import</div>
+                    <textarea value={importJson} onChange={(e) => setImportJson(e.target.value)}
+                      autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                      placeholder="Paste export JSON here"
+                      rows={4}
+                      className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-xs placeholder-[#6272a4] text-[#f8f8f2]" />
+                    {importError && <p className="text-xs text-[#ff5555]">{importError}</p>}
+                    <button onClick={importSources} disabled={!importJson.trim()}
+                      className="w-full rounded-lg px-3 py-2 text-sm font-medium bg-[#bd93f9] text-[#282a36] disabled:bg-[#21222c] disabled:text-[#44475a]">
+                      Import sources
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
           </div>
