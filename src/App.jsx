@@ -241,35 +241,6 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
           {/* Recommendation */}
           <div className={`text-sm font-medium ${decision.textCls}`}>{sizeReason()}</div>
 
-          {/* Game assignment */}
-          {movePickToGame && (
-            <div className="space-y-1.5">
-              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Game assignment</div>
-              <div className="flex flex-wrap gap-2 items-center">
-                <span className="text-xs text-[#f8f8f2]">{assignedGame ? `Assigned to ${assignedGame.label}` : "No game assigned"}</span>
-                {assignedGame && (
-                  <button onClick={() => movePickToGame(pick.id, null)}
-                    className="text-[#6272a4] bg-[#21222c] border border-[#6272a4] rounded-lg px-2 py-1 text-[11px] hover:bg-[#282a36]">
-                    Clear
-                  </button>
-                )}
-              </div>
-              {games.length > 0 ? (
-                <div className="flex flex-wrap gap-2">
-                  {games.map((game) => (
-                    <button key={game.id}
-                      onClick={() => movePickToGame(pick.id, game.id)}
-                      className={`px-2.5 py-1.5 rounded-lg text-xs border ${pick.gameId === game.id ? "bg-[#bd93f9]/15 border-[#bd93f9]/60 text-[#bd93f9]" : "bg-[#343746] border-[#44475a] text-[#6272a4]"}`}>
-                      {game.label}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-[#6272a4]">Add a game for this sport to assign the pick.</div>
-              )}
-            </div>
-          )}
-
           {/* Score breakdown */}
           <div className="space-y-1.5">
             <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Score breakdown</div>
@@ -290,6 +261,27 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
               <span className={`text-sm font-bold ${decision.textCls}`}>{score.total}/100</span>
             </div>
           </div>
+
+          {/* Game assignment */}
+          {movePickToGame && (
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Game assignment</div>
+              {games.length > 0 ? (
+                <select
+                  value={pick.gameId || ""}
+                  onChange={(e) => movePickToGame(pick.id, e.target.value || null)}
+                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
+                >
+                  <option value="">No game assigned</option>
+                  {games.map((game) => (
+                    <option key={game.id} value={game.id}>{game.label}{game.gameTime ? ` · ${game.gameTime}` : ""}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="text-xs text-[#6272a4]">Add a game for this sport to assign the pick.</div>
+              )}
+            </div>
+          )}
 
           {/* Sources — editable */}
           <div className="space-y-1.5">
@@ -405,6 +397,9 @@ export default function BetBoard() {
   const [selectedGameId, setSelectedGameId] = useState(null);
   const [newGameLabel, setNewGameLabel] = useState(null);
   const [newGameTime, setNewGameTime] = useState("");
+  const [editingGameId, setEditingGameId] = useState(null);
+  const [editingGameLabel, setEditingGameLabel] = useState("");
+  const [editingGameTime, setEditingGameTime] = useState("");
   const [pickLabel, setPickLabel] = useState("");
   const [selectedSourceIds, setSelectedSourceIds] = useState(new Set());
   const [addMultiple, setAddMultiple] = useState(false);
@@ -611,8 +606,19 @@ export default function BetBoard() {
       setPicks(nextPicks);
       persistBoard(nextGames, nextPicks);
       if (selectedGameId === id) setSelectedGameId(null);
+      if (editingGameId === id) setEditingGameId(null);
       showToast(`${game?.label || "Game"} deleted`, "remove");
     });
+  }
+
+  function updateGame(id, label, gameTime) {
+    const nextGames = games.map((g) => g.id === id ? { ...g, label, gameTime } : g);
+    setGames(nextGames);
+    persistBoard(nextGames, picks);
+    setEditingGameId(null);
+    setEditingGameLabel("");
+    setEditingGameTime("");
+    showToast("Game updated");
   }
 
   // Delete an entire sport section: all its picks (and all games, for NFL).
@@ -823,11 +829,41 @@ export default function BetBoard() {
                                   {game.gameTime && <span className="text-xs text-[#6272a4] flex-shrink-0">{game.gameTime}</span>}
                                   {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
                                 </button>
-                                <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
-                                  className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
-                                  <Trash2 size={16} />
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => {
+                                      setEditingGameId(game.id);
+                                      setEditingGameLabel(game.label);
+                                      setEditingGameTime(game.gameTime || "");
+                                    }}
+                                    className="text-[#6272a4] px-2 py-1 rounded-lg border border-[#44475a] active:bg-[#282a36] text-xs">
+                                    Edit
+                                  </button>
+                                  <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
+                                    className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
                               </div>
+                              {editingGameId === game.id && (
+                                <div className="px-3 py-3 border-t border-[#44475a] bg-[#2d2f3b] rounded-b-lg space-y-2">
+                                  <input value={editingGameLabel} onChange={(e) => setEditingGameLabel(e.target.value)}
+                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
+                                    placeholder="Game label" />
+                                  <input value={editingGameTime} onChange={(e) => setEditingGameTime(e.target.value)}
+                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
+                                    placeholder="Game time (optional)" />
+                                  <div className="flex gap-2">
+                                    <button onClick={() => updateGame(game.id, editingGameLabel.trim() || game.label, editingGameTime.trim())}
+                                      className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold">
+                                      Save
+                                    </button>
+                                    <button onClick={() => setEditingGameId(null)}
+                                      className="flex-1 bg-[#21222c] border border-[#44475a] rounded-lg py-2 text-sm text-[#6272a4]">
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                               {!gameCollapsed && (gamePicks.length === 0 ? (
                                 <div className="px-3 py-2 text-xs text-[#6272a4]">No picks for this game yet.</div>
                               ) : (
@@ -905,11 +941,41 @@ export default function BetBoard() {
                                   {game.gameTime && <span className="text-xs text-[#6272a4] flex-shrink-0">{game.gameTime}</span>}
                                   {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
                                 </button>
-                                <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
-                                  className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
-                                  <Trash2 size={16} />
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  <button onClick={() => {
+                                      setEditingGameId(game.id);
+                                      setEditingGameLabel(game.label);
+                                      setEditingGameTime(game.gameTime || "");
+                                    }}
+                                    className="text-[#6272a4] px-2 py-1 rounded-lg border border-[#44475a] active:bg-[#282a36] text-xs">
+                                    Edit
+                                  </button>
+                                  <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
+                                    className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
+                                    <Trash2 size={16} />
+                                  </button>
+                                </div>
                               </div>
+                              {editingGameId === game.id && (
+                                <div className="px-3 py-3 border-t border-[#44475a] bg-[#2d2f3b] rounded-b-lg space-y-2">
+                                  <input value={editingGameLabel} onChange={(e) => setEditingGameLabel(e.target.value)}
+                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
+                                    placeholder="Game label" />
+                                  <input value={editingGameTime} onChange={(e) => setEditingGameTime(e.target.value)}
+                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
+                                    placeholder="Game time (optional)" />
+                                  <div className="flex gap-2">
+                                    <button onClick={() => updateGame(game.id, editingGameLabel.trim() || game.label, editingGameTime.trim())}
+                                      className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold">
+                                      Save
+                                    </button>
+                                    <button onClick={() => setEditingGameId(null)}
+                                      className="flex-1 bg-[#21222c] border border-[#44475a] rounded-lg py-2 text-sm text-[#6272a4]">
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                               {!gameCollapsed && (gamePicks.length === 0 ? (
                                 <div className="px-3 py-2 text-xs text-[#6272a4]">No picks for this game yet.</div>
                               ) : (
