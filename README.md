@@ -23,15 +23,43 @@ create table boards (
 
 alter table boards enable row level security;
 
-create policy "Allow all operations"
+-- Each user can only read/write their own board row.
+-- The row id equals the signed-in user's auth id.
+create policy "Users manage their own board"
   on boards for all
-  using (true)
-  with check (true);
+  using (auth.uid()::text = id)
+  with check (auth.uid()::text = id);
 ```
+
+> Already created the table with the old "Allow all operations" policy? Run this once to switch to per-user security:
+>
+> ```sql
+> drop policy if exists "Allow all operations" on boards;
+>
+> create policy "Users manage their own board"
+>   on boards for all
+>   using (auth.uid()::text = id)
+>   with check (auth.uid()::text = id);
+> ```
 
 5. Go to **Project Settings → API** and copy two values:
    - **Project URL** (looks like `https://xxxx.supabase.co`)
    - **Publishable key** (starts with `sb_publishable_`, under **API Keys**). This is the new public client key that replaced the legacy `anon` key — safe to ship in the frontend since the table is protected by Row Level Security.
+
+---
+
+### 1b. Set up email sign-in (so your board syncs across devices)
+
+The app signs you in with an email magic link, then keys your board to your account — so logging in on your phone shows the same board as your computer.
+
+1. In Supabase, go to **Authentication → Sign In / Providers** and make sure **Email** is enabled (it is by default). No password is needed — it uses magic links.
+2. Go to **Authentication → URL Configuration** and set:
+   - **Site URL**: `https://YOUR_USERNAME.github.io/betting-board/`
+   - **Redirect URLs**: add both of these (one per line):
+     - `https://YOUR_USERNAME.github.io/betting-board/`
+     - `http://localhost:5173/betting-board/` (for local development)
+
+   These must match exactly, or the sign-in link will fail to return you to the app.
 
 ---
 
@@ -99,14 +127,13 @@ Open the printed URL (e.g. `http://localhost:5173/betting-board/`). If you skip 
 
 ## Using on multiple devices
 
-Your board is identified by a UUID that's stored in your browser's localStorage.
+Your board is tied to your account, so syncing is automatic:
 
-1. Open the app on your first device and go to **Setup**
-2. Find **Your Board ID** at the bottom and tap **Copy**
-3. On your second device, open the same URL, go to **Setup**, paste the ID into the input field, and tap **Load**
-4. The app reloads with your data
+1. Open the app on any device and sign in with your email (you'll get a magic link — no password)
+2. The same board appears everywhere you're signed in
+3. Changes save to Supabase instantly and show up on your other devices on their next load
 
-> Keep your board ID somewhere safe (notes app, password manager). If you clear your browser storage and don't have the ID, you won't be able to recover your data.
+To switch accounts or sign out, go to **Setup → Signed in as → Sign out**.
 
 ---
 

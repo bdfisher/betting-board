@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { storage } from "./storage";
+import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import {
   Plus,
   Trash2,
@@ -371,6 +372,12 @@ export default function BetBoard() {
   const [sourceSearch, setSourceSearch] = useState("");
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [toast, setToast] = useState(null); // { message, type: "success"|"remove" }
+  const [userEmail, setUserEmail] = useState(null);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured) return;
+    supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null));
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -507,6 +514,11 @@ export default function BetBoard() {
   function showToast(message, type = "success") {
     setToast({ message, type });
     setTimeout(() => setToast(null), 2500);
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    window.location.reload();
   }
 
   function addPick() {
@@ -875,6 +887,20 @@ export default function BetBoard() {
 
         {activeTab === "setup" && (
           <div className="space-y-5">
+            {isSupabaseConfigured && (
+              <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Signed in as</div>
+                  <div className="text-sm text-[#8be9fd] truncate">{userEmail || "…"}</div>
+                  <div className="text-[10px] text-[#6272a4] mt-0.5">Your board syncs automatically on any device you sign in to.</div>
+                </div>
+                <button onClick={signOut}
+                  className="flex-shrink-0 rounded-lg px-3 py-2 text-sm font-medium bg-[#44475a] text-[#f8f8f2]">
+                  Sign out
+                </button>
+              </div>
+            )}
+
             <div>
               <label className="text-xs uppercase tracking-wide text-[#6272a4]">Unit value (optional)</label>
               <div className="mt-1 flex items-center gap-2">
