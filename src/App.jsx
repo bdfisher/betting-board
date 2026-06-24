@@ -372,7 +372,7 @@ export default function BetBoard() {
   // add flow state
   const [selectedSport, setSelectedSport] = useState(null);
   const [selectedGameId, setSelectedGameId] = useState(null);
-  const [newGameLabel, setNewGameLabel] = useState("");
+  const [newGameLabel, setNewGameLabel] = useState(null);
   const [newGameTime, setNewGameTime] = useState("");
   const [pickLabel, setPickLabel] = useState("");
   const [selectedSourceIds, setSelectedSourceIds] = useState(new Set());
@@ -553,16 +553,17 @@ export default function BetBoard() {
     if (expandedSourceId === id) setExpandedSourceId(null);
   }
 
-  // ----- games (NFL only, flat list) -----
+  // ----- games (flat list for any sport) -----
   function addGame() {
+    if (!newGameLabel) return;
     const label = newGameLabel.trim();
     if (!label) return;
-    const game = { id: uid(), label, gameTime: newGameTime.trim(), createdAt: new Date().toISOString() };
+    const game = { id: uid(), label, sport: selectedSport, gameTime: newGameTime.trim(), createdAt: new Date().toISOString() };
     const nextGames = [...games, game];
     setGames(nextGames);
     persistBoard(nextGames, picks);
     setSelectedGameId(game.id);
-    setNewGameLabel("");
+    setNewGameLabel(null);
     setNewGameTime("");
   }
 
@@ -617,7 +618,6 @@ export default function BetBoard() {
 
   function canSubmitPick() {
     if (!pickLabel.trim() || !selectedSport || selectedSourceIds.size === 0) return false;
-    if (selectedSport === "NFL" && !selectedGameId) return false;
     return true;
   }
 
@@ -648,7 +648,7 @@ export default function BetBoard() {
     const entries = [...selectedSourceIds].map((sid) => ({ sourceId: sid, dateAdded: new Date().toISOString() }));
     const pick = {
       id: uid(),
-      gameId: selectedSport === "NFL" ? selectedGameId : null,
+      gameId: selectedGameId || null,
       label: pickLabel.trim(),
       sport: selectedSport,
       sources: entries,
@@ -875,7 +875,7 @@ export default function BetBoard() {
               <label className="text-xs uppercase tracking-wide text-[#6272a4]">Sport</label>
               <div className="mt-1 flex flex-wrap gap-2">
                 {LEAGUES.map((l) => (
-                  <button key={l} onClick={() => { setSelectedSport(l); if (l !== "NFL") setSelectedGameId(null); }}
+                  <button key={l} onClick={() => { setSelectedSport(l); setSelectedGameId(null); }}
                     className={`px-3.5 py-2 rounded-lg text-sm border active:scale-95 transition-transform ${
                       selectedSport === l
                         ? "bg-[#bd93f9]/15 border-[#bd93f9]/60 text-[#bd93f9]"
@@ -887,12 +887,12 @@ export default function BetBoard() {
               </div>
             </div>
 
-            {/* NFL game picker */}
-            {selectedSport === "NFL" && (
+            {/* Game picker */}
+            {selectedSport && (
               <div>
                 <label className="text-xs uppercase tracking-wide text-[#6272a4]">Game</label>
                 <div className="mt-1 flex flex-wrap gap-2">
-                  {[...games]
+                  {[...games].filter((g) => g.sport === selectedSport)
                     .sort((a, b) => (a.gameTime || "").localeCompare(b.gameTime || ""))
                     .map((g) => (
                       <button key={g.id}
@@ -1026,6 +1026,7 @@ export default function BetBoard() {
                                     return next;
                                   });
                                   setSourceSearch("");
+                                  setSourceDropdownOpen(false);
                                 }}
                                 className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 transition-colors ${
                                   active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#21222c]"
