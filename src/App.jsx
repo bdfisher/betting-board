@@ -170,13 +170,15 @@ function lineWithinTolerance(line1, line2, market) {
   return Math.abs(Number(line1) - Number(line2)) <= tol;
 }
 
-function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources }) {
+function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources, movePickToGame }) {
   const expanded = expandedPickId === pick.id;
   const score = scorePick(pick, sourcesMap, sport);
   const decision = scoreToDecision(score.total, score.aCount);
   const pickSources = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
   const [srcSearch, setSrcSearch] = useState("");
   const [srcDropOpen, setSrcDropOpen] = useState(false);
+
+  const assignedGame = games.find((g) => g.id === pick.gameId) || null;
 
   function openDrop() {
     setSrcDropOpen(true);
@@ -238,6 +240,35 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
         <div className="mt-3 bg-[#282a36] rounded-lg p-3 space-y-3 border border-[#44475a]">
           {/* Recommendation */}
           <div className={`text-sm font-medium ${decision.textCls}`}>{sizeReason()}</div>
+
+          {/* Game assignment */}
+          {movePickToGame && (
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Game assignment</div>
+              <div className="flex flex-wrap gap-2 items-center">
+                <span className="text-xs text-[#f8f8f2]">{assignedGame ? `Assigned to ${assignedGame.label}` : "No game assigned"}</span>
+                {assignedGame && (
+                  <button onClick={() => movePickToGame(pick.id, null)}
+                    className="text-[#6272a4] bg-[#21222c] border border-[#6272a4] rounded-lg px-2 py-1 text-[11px] hover:bg-[#282a36]">
+                    Clear
+                  </button>
+                )}
+              </div>
+              {games.length > 0 ? (
+                <div className="flex flex-wrap gap-2">
+                  {games.map((game) => (
+                    <button key={game.id}
+                      onClick={() => movePickToGame(pick.id, game.id)}
+                      className={`px-2.5 py-1.5 rounded-lg text-xs border ${pick.gameId === game.id ? "bg-[#bd93f9]/15 border-[#bd93f9]/60 text-[#bd93f9]" : "bg-[#343746] border-[#44475a] text-[#6272a4]"}`}>
+                      {game.label}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-[#6272a4]">Add a game for this sport to assign the pick.</div>
+              )}
+            </div>
+          )}
 
           {/* Score breakdown */}
           <div className="space-y-1.5">
@@ -587,17 +618,17 @@ export default function BetBoard() {
   // Delete an entire sport section: all its picks (and all games, for NFL).
   function deleteSport(sport) {
     const pickCount = picks.filter((p) => p.sport === sport).length;
-    const gameCount = sport === "NFL" ? games.length : 0;
+    const gameCount = games.filter((g) => g.sport === sport).length;
     if (pickCount === 0 && gameCount === 0) return;
     const parts = [];
     if (pickCount) parts.push(`${pickCount} pick${pickCount === 1 ? "" : "s"}`);
     if (gameCount) parts.push(`${gameCount} game${gameCount === 1 ? "" : "s"}`);
     requestConfirm(`Delete all of ${sport}? This removes ${parts.join(" and ")}. This can't be undone.`, () => {
       const nextPicks = picks.filter((p) => p.sport !== sport);
-      const nextGames = sport === "NFL" ? [] : games;
+      const nextGames = games.filter((g) => g.sport !== sport);
       setPicks(nextPicks);
-      if (sport === "NFL") {
-        setGames(nextGames);
+      setGames(nextGames);
+      if (selectedGameId && games.find((g) => g.id === selectedGameId && g.sport === sport)) {
         setSelectedGameId(null);
       }
       persistBoard(nextGames, nextPicks);
@@ -669,6 +700,12 @@ export default function BetBoard() {
     setPicks(nextPicks);
     persistBoard(games, nextPicks);
     showToast("Pick removed", "remove");
+  }
+
+  function movePickToGame(id, gameId) {
+    const next = picks.map((p) => p.id === id ? { ...p, gameId: gameId || null } : p);
+    setPicks(next);
+    persistBoard(games, next);
   }
 
   function updatePickSources(id, nextSources) {
@@ -769,7 +806,7 @@ export default function BetBoard() {
                     </div>
                     {!nflCollapsed && (
                     <div className="space-y-2">
-                      {[...games]
+                      {games.filter((g) => g.sport === "NFL")
                         .sort((a, b) => (a.gameTime || "zzz").localeCompare(b.gameTime || "zzz"))
                         .map((game) => {
                           const gamePicks = picks
@@ -796,10 +833,10 @@ export default function BetBoard() {
                               ) : (
                                 <div className="divide-y divide-[#44475a]">
                                   {gamePicks.map((pick) => (
-                                    <PickCard key={pick.id} pick={pick} sport="NFL"
+                                    <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
                                       sources={sources} sourcesMap={sourcesMap}
                                       expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
+                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} />
                                   ))}
                                 </div>
                               ))}
@@ -814,10 +851,10 @@ export default function BetBoard() {
                             {picks.filter((p) => p.sport === "NFL" && !p.gameId)
                               .sort((a, b) => scorePick(b, sourcesMap, "NFL").total - scorePick(a, sourcesMap, "NFL").total)
                               .map((pick) => (
-                                <PickCard key={pick.id} pick={pick} sport="NFL"
+                                <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
+                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} />
                               ))}
                           </div>
                         </div>
@@ -830,10 +867,12 @@ export default function BetBoard() {
 
                 {/* ── Non-NFL sections grouped by sport ── */}
                 {LEAGUES.filter((l) => l !== "NFL").map((sport) => {
+                  const sportGames = games.filter((g) => g.sport === sport);
                   const sportPicks = picks
-                    .filter((p) => p.sport === sport)
+                    .filter((p) => p.sport === sport && !p.gameId)
                     .sort((a, b) => scorePick(b, sourcesMap, sport).total - scorePick(a, sourcesMap, sport).total);
-                  if (sportPicks.length === 0) return null;
+                  const hasSportContent = sportGames.length > 0 || sportPicks.length > 0;
+                  if (!hasSportContent) return null;
                   const sportCollapsed = collapsedSports.has(sport);
                   return (
                     <div key={sport}>
@@ -842,7 +881,7 @@ export default function BetBoard() {
                           className="flex items-center gap-1.5 -ml-1 p-1 rounded-lg active:bg-[#343746]">
                           {sportCollapsed ? <ChevronRight size={15} className="text-[#6272a4]" /> : <ChevronDown size={15} className="text-[#6272a4]" />}
                           <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">{sport}</span>
-                          {sportCollapsed && <span className="text-[10px] text-[#6272a4]">({sportPicks.length})</span>}
+                          {sportCollapsed && <span className="text-[10px] text-[#6272a4]">({sportGames.length + sportPicks.length})</span>}
                         </button>
                         <button onClick={() => deleteSport(sport)} aria-label={`Delete all ${sport}`}
                           className="text-[#6272a4] active:text-[#ff5555] active:bg-[#343746] p-1.5 -m-1 rounded-lg">
@@ -850,13 +889,59 @@ export default function BetBoard() {
                         </button>
                       </div>
                       {!sportCollapsed && (
-                      <div className="bg-[#343746] border border-[#44475a] rounded-lg divide-y divide-[#44475a]">
-                        {sportPicks.map((pick) => (
-                          <PickCard key={pick.id} pick={pick} sport={sport}
-                            sources={sources} sourcesMap={sourcesMap}
-                            expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                            toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
-                        ))}
+                      <div className="space-y-3">
+                        {sportGames.map((game) => {
+                          const gamePicks = picks
+                            .filter((p) => p.gameId === game.id)
+                            .sort((a, b) => scorePick(b, sourcesMap, sport).total - scorePick(a, sourcesMap, sport).total);
+                          const gameCollapsed = collapsedGames.has(game.id);
+                          return (
+                            <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
+                              <div className={`flex items-center justify-between px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
+                                <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
+                                  className="flex items-center gap-1.5 min-w-0 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0" />}
+                                  <span className="text-sm font-semibold text-[#f8f8f2] truncate">{game.label}</span>
+                                  {game.gameTime && <span className="text-xs text-[#6272a4] flex-shrink-0">{game.gameTime}</span>}
+                                  {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
+                                </button>
+                                <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
+                                  className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
+                              {!gameCollapsed && (gamePicks.length === 0 ? (
+                                <div className="px-3 py-2 text-xs text-[#6272a4]">No picks for this game yet.</div>
+                              ) : (
+                                <div className="divide-y divide-[#44475a]">
+                                  {gamePicks.map((pick) => (
+                                    <PickCard key={pick.id} pick={pick} sport={sport}
+                                      games={sportGames}
+                                      sources={sources} sourcesMap={sourcesMap}
+                                      expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
+                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
+                                      movePickToGame={movePickToGame} />
+                                  ))}
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })}
+                        {sportPicks.length > 0 && (
+                          <div className="bg-[#343746] border border-[#44475a] rounded-lg">
+                            <div className="px-3 py-2 border-b border-[#44475a] text-xs text-[#6272a4]">No game assigned</div>
+                            <div className="divide-y divide-[#44475a]">
+                              {sportPicks.map((pick) => (
+                                <PickCard key={pick.id} pick={pick} sport={sport}
+                                  games={sportGames}
+                                  sources={sources} sourcesMap={sourcesMap}
+                                  expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
+                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
+                                  movePickToGame={movePickToGame} />
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                       )}
                     </div>
