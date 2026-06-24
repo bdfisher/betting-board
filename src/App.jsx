@@ -42,22 +42,28 @@ const DECISIONS = [
   { key: "pass",     label: "Pass", units: 0,   textCls: "text-[#ff5555]",    bgCls: "bg-[#ff5555]/10 border-[#ff5555]/40" },
   { key: "small",    label: "0.5u", units: 0.5, textCls: "text-[#bd93f9]",   bgCls: "bg-[#bd93f9]/15 border-[#bd93f9]/40" },
   { key: "standard", label: "1u",   units: 1,   textCls: "text-[#50fa7b]", bgCls: "bg-[#50fa7b]/10 border-[#50fa7b]/40" },
+  { key: "mid",      label: "1.5u", units: 1.5, textCls: "text-[#69ff94]", bgCls: "bg-[#50fa7b]/10 border-[#50fa7b]/35" },
   { key: "high",     label: "2u",   units: 2,   textCls: "text-[#69ff94]", bgCls: "bg-[#50fa7b]/10 border-[#50fa7b]/30" },
 ];
+const DECISION = Object.fromEntries(DECISIONS.map((d) => [d.key, d]));
 
 function scorePick(pick, sourcesMap, sport) {
   const pickSrcDetails = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
   const sourceScore = pickSrcDetails.reduce((s, src) => s + (TIER_WEIGHTS[getSourceTier(src, sport)] || 0), 0);
+  const aCount = pickSrcDetails.filter((src) => getSourceTier(src, sport) === "A").length;
   const starBonus = pick.star ? 20 : 0;
   const total = Math.min(100, sourceScore + starBonus);
-  return { total, sourceScore, starBonus };
+  return { total, sourceScore, starBonus, aCount };
 }
 
-function scoreToDecision(total) {
-  if (total >= 85) return DECISIONS[3]; // 2u
-  if (total >= 70) return DECISIONS[2]; // 1u
-  if (total >= 55) return DECISIONS[1]; // 0.5u
-  return DECISIONS[0];                  // Pass
+function scoreToDecision(total, aCount = 0) {
+  // 2u is only advisable when 2+ A-tier sources back the pick. Any other
+  // composition (a B-tier, A+C, A+B, …) is capped at 1.5u even if its raw
+  // score would otherwise clear the 2u bar.
+  if (total >= 85) return aCount >= 2 ? DECISION.high : DECISION.mid;
+  if (total >= 70) return DECISION.standard; // 1u
+  if (total >= 55) return DECISION.small;     // 0.5u
+  return DECISION.pass;
 }
 
 function uid() {
@@ -167,7 +173,7 @@ function lineWithinTolerance(line1, line2, market) {
 function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources }) {
   const expanded = expandedPickId === pick.id;
   const score = scorePick(pick, sourcesMap, sport);
-  const decision = scoreToDecision(score.total);
+  const decision = scoreToDecision(score.total, score.aCount);
   const pickSources = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
   const [srcSearch, setSrcSearch] = useState("");
   const [srcDropOpen, setSrcDropOpen] = useState(false);
@@ -185,7 +191,8 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
     if (decision.key === "pass") return `Pass — not enough signal (${reason})`;
     if (decision.key === "small") return `Small (0.5u) — light signal (${reason})`;
     if (decision.key === "standard") return `Standard (1u) — solid signal (${reason})`;
-    return `High conviction (2u) — strong signal (${reason})`;
+    if (decision.key === "mid") return `1.5u — strong, but 2u needs 2+ A-tier sources (${reason})`;
+    return `High conviction (2u) — two or more A-tier sources agree (${reason})`;
   }
 
   return (
