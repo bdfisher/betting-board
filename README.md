@@ -31,7 +31,7 @@ create policy "Allow all operations"
 
 5. Go to **Project Settings → API** and copy two values:
    - **Project URL** (looks like `https://xxxx.supabase.co`)
-   - **anon public** key (long string under Project API keys)
+   - **Publishable key** (starts with `sb_publishable_`, under **API Keys**). This is the new public client key that replaced the legacy `anon` key — safe to ship in the frontend since the table is protected by Row Level Security.
 
 ---
 
@@ -63,7 +63,7 @@ Replace `YOUR_USERNAME` with your GitHub username.
 | Name | Value |
 |---|---|
 | `VITE_SUPABASE_URL` | Your Supabase Project URL |
-| `VITE_SUPABASE_ANON_KEY` | Your Supabase anon public key |
+| `VITE_SUPABASE_PUBLISHABLE_KEY` | Your Supabase publishable key (`sb_publishable_…`) |
 
 ---
 
@@ -80,8 +80,20 @@ Replace `YOUR_USERNAME` with your GitHub username.
 Go to the **Actions** tab in your repo. You should see the deploy workflow running (or click **Run workflow** to trigger it manually). After ~2 minutes, your app will be live at:
 
 ```
-https://YOUR_USERNAME.github.io/bet-board/
+https://YOUR_USERNAME.github.io/betting-board/
 ```
+
+---
+
+## Running locally
+
+```bash
+npm install
+cp .env.example .env   # then paste your Supabase URL + publishable key into .env
+npm run dev
+```
+
+Open the printed URL (e.g. `http://localhost:5173/betting-board/`). If you skip the `.env` step the app still runs, but data is saved only in your browser's localStorage (no cloud sync).
 
 ---
 

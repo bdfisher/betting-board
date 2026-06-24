@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { storage } from "./storage";
 import {
   Plus,
   Trash2,
@@ -378,7 +379,7 @@ export default function BetBoard() {
       let loadedUnit = "";
       let loadedBoard = { games: [], picks: [] };
       try {
-        const s = await window.storage.get("settings");
+        const s = await storage.get("settings");
         if (s && s.value) {
           const parsed = JSON.parse(s.value);
           loadedSources = (parsed.sources || []).map(migrateSource);
@@ -386,7 +387,7 @@ export default function BetBoard() {
         }
       } catch (e) {}
       try {
-        const b = await window.storage.get("board");
+        const b = await storage.get("board");
         if (b && b.value) {
           const parsed = JSON.parse(b.value);
           loadedBoard = {
@@ -410,7 +411,7 @@ export default function BetBoard() {
 
   const persistSettings = useCallback(async (nextSources, nextUnit) => {
     try {
-      await window.storage.set("settings", JSON.stringify({ sources: nextSources, unitValue: nextUnit }));
+      await storage.set("settings", JSON.stringify({ sources: nextSources, unitValue: nextUnit }));
     } catch (e) {
       console.error("Failed to save settings", e);
     }
@@ -418,7 +419,7 @@ export default function BetBoard() {
 
   const persistBoard = useCallback(async (nextGames, nextPicks) => {
     try {
-      await window.storage.set("board", JSON.stringify({ games: nextGames, picks: nextPicks }));
+      await storage.set("board", JSON.stringify({ games: nextGames, picks: nextPicks }));
     } catch (e) {
       console.error("Failed to save board", e);
     }

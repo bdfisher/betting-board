@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// Change '/bet-board/' to match your GitHub repo name exactly
+// base must match your GitHub repo name exactly (served at /<repo>/ on Pages)
 export default defineConfig({
   plugins: [react()],
-  base: '/bet-board/',
+  base: '/betting-board/',
 })
