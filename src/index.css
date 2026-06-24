@@ -1,3 +1,31 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ---- Mobile ergonomics ---- */
+
+/* Inputs at 16px+ so iOS Safari doesn't auto-zoom the page on focus.
+   !important is required to beat Tailwind's text-sm/text-xs utility classes. */
+input,
+textarea,
+select {
+  font-size: 16px !important;
+}
+
+/* Remove the grey tap flash; we provide our own active states. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Let content paint into the notch / status-bar area (viewport-fit=cover). */
+body {
+  overscroll-behavior-y: none;
+}
+
+/* Safe-area helpers for the fixed bottom nav and bottom-pinned UI. */
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.bottom-safe {
+  bottom: calc(env(safe-area-inset-bottom) + 0.75rem);
+}

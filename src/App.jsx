@@ -169,14 +169,8 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
   const pickSources = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
   const [srcSearch, setSrcSearch] = useState("");
   const [srcDropOpen, setSrcDropOpen] = useState(false);
-  const [dropPos, setDropPos] = useState({ top: 0, left: 0, width: 200 });
-  const addInputRef = React.useRef(null);
 
   function openDrop() {
-    if (addInputRef.current) {
-      const r = addInputRef.current.getBoundingClientRect();
-      setDropPos({ top: r.bottom + 4, left: r.left, width: r.width });
-    }
     setSrcDropOpen(true);
   }
 
@@ -209,18 +203,19 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${decision.bgCls} ${decision.textCls}`}>
             {score.total} · {decision.label}
           </span>
-          {expanded ? <ChevronUp size={13} className="text-[#44475a]" /> : <ChevronDown size={13} className="text-[#44475a]" />}
+          {expanded ? <ChevronUp size={16} className="text-[#6272a4]" /> : <ChevronDown size={16} className="text-[#6272a4]" />}
         </div>
       </button>
 
-      {/* Row 2: controls */}
-      <div className="flex items-center gap-2 mt-1.5">
-        <button onClick={() => toggleStar(pick.id)}
-          className={`flex-shrink-0 ${pick.star ? "text-[#bd93f9]" : "text-[#6272a4] hover:text-[#f8f8f2]"}`}>
-          <Star size={14} fill={pick.star ? "currentColor" : "none"} />
+      {/* Row 2: controls — padded to ~44px tap targets */}
+      <div className="flex items-center mt-0.5 -mb-1">
+        <button onClick={() => toggleStar(pick.id)} aria-label={pick.star ? "Unstar pick" : "Star pick"}
+          className={`flex-shrink-0 p-2 -ml-2 rounded-lg active:bg-[#282a36] ${pick.star ? "text-[#bd93f9]" : "text-[#6272a4]"}`}>
+          <Star size={17} fill={pick.star ? "currentColor" : "none"} />
         </button>
-        <button onClick={() => deletePick(pick.id)} className="ml-auto text-[#6272a4] hover:text-[#ff5555] flex-shrink-0">
-          <Trash2 size={14} />
+        <button onClick={() => deletePick(pick.id)} aria-label="Delete pick"
+          className="ml-auto p-2 -mr-2 rounded-lg text-[#6272a4] active:bg-[#282a36] active:text-[#ff5555] flex-shrink-0">
+          <Trash2 size={17} />
         </button>
       </div>
 
@@ -232,7 +227,7 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
 
           {/* Score breakdown */}
           <div className="space-y-1.5">
-            <div className="text-[10px] uppercase tracking-wide text-[#44475a]">Score breakdown</div>
+            <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Score breakdown</div>
             {[
               ["Sources", score.sourceScore, 80],
               ["Personal star", score.starBonus, 20],
@@ -253,9 +248,9 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
 
           {/* Sources — editable */}
           <div className="space-y-1.5">
-            <div className="text-[10px] uppercase tracking-wide text-[#44475a]">Sources</div>
+            <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Sources</div>
             {pickSources.length === 0 && (
-              <div className="text-xs text-[#44475a]">No sources on this pick.</div>
+              <div className="text-xs text-[#6272a4]">No sources on this pick.</div>
             )}
             {pickSources.map((src) => {
               const tier = getSourceTier(src, sport);
@@ -269,7 +264,7 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
                   </div>
                   <button
                     onClick={() => updatePickSources(pick.id, (pick.sources || []).filter((ps) => ps.sourceId !== src.id))}
-                    className="text-[#44475a] hover:text-[#ff5555] text-xs ml-2"
+                    className="text-[#6272a4] active:text-[#ff5555] text-base leading-none px-2 py-1 -my-1"
                   >×</button>
                 </div>
               );
@@ -278,9 +273,8 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
             {/* Add source inline */}
             <div className="relative pt-1">
               <div
-                ref={addInputRef}
                 onClick={openDrop}
-                className="flex items-center gap-2 px-2.5 py-1.5 bg-[#343746] border border-dashed border-[#6272a4] rounded-lg cursor-text"
+                className="flex items-center gap-2 px-2.5 py-2 bg-[#343746] border border-dashed border-[#6272a4] rounded-lg cursor-text"
               >
                 <Plus size={12} className="text-[#6272a4] flex-shrink-0" />
                 <input
@@ -294,10 +288,7 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
               </div>
               {srcDropOpen && (
                 <>
-                  <div
-                    className="fixed z-50 bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-40"
-                    style={{ top: dropPos.top, left: dropPos.left, width: dropPos.width }}
-                  >
+                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-56">
                     {sources
                       .filter((s) => {
                         const alreadyOn = (pick.sources || []).some((ps) => ps.sourceId === s.id);
@@ -373,6 +364,7 @@ export default function BetBoard() {
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [toast, setToast] = useState(null); // { message, type: "success"|"remove" }
   const [userEmail, setUserEmail] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null); // { message, confirmLabel, onConfirm }
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -486,12 +478,41 @@ export default function BetBoard() {
   }
 
   function deleteGame(id) {
-    const nextGames = games.filter((g) => g.id !== id);
-    const nextPicks = picks.filter((p) => p.gameId !== id);
-    setGames(nextGames);
-    setPicks(nextPicks);
-    persistBoard(nextGames, nextPicks);
-    if (selectedGameId === id) setSelectedGameId(null);
+    const game = games.find((g) => g.id === id);
+    const n = picks.filter((p) => p.gameId === id).length;
+    const msg = n > 0
+      ? `Delete "${game?.label || "this game"}" and its ${n} pick${n === 1 ? "" : "s"}? This can't be undone.`
+      : `Delete "${game?.label || "this game"}"?`;
+    requestConfirm(msg, () => {
+      const nextGames = games.filter((g) => g.id !== id);
+      const nextPicks = picks.filter((p) => p.gameId !== id);
+      setGames(nextGames);
+      setPicks(nextPicks);
+      persistBoard(nextGames, nextPicks);
+      if (selectedGameId === id) setSelectedGameId(null);
+      showToast(`${game?.label || "Game"} deleted`, "remove");
+    });
+  }
+
+  // Delete an entire sport section: all its picks (and all games, for NFL).
+  function deleteSport(sport) {
+    const pickCount = picks.filter((p) => p.sport === sport).length;
+    const gameCount = sport === "NFL" ? games.length : 0;
+    if (pickCount === 0 && gameCount === 0) return;
+    const parts = [];
+    if (pickCount) parts.push(`${pickCount} pick${pickCount === 1 ? "" : "s"}`);
+    if (gameCount) parts.push(`${gameCount} game${gameCount === 1 ? "" : "s"}`);
+    requestConfirm(`Delete all of ${sport}? This removes ${parts.join(" and ")}. This can't be undone.`, () => {
+      const nextPicks = picks.filter((p) => p.sport !== sport);
+      const nextGames = sport === "NFL" ? [] : games;
+      setPicks(nextPicks);
+      if (sport === "NFL") {
+        setGames(nextGames);
+        setSelectedGameId(null);
+      }
+      persistBoard(nextGames, nextPicks);
+      showToast(`${sport} cleared`, "remove");
+    }, `Delete ${sport}`);
   }
 
   // ----- picks -----
@@ -515,6 +536,18 @@ export default function BetBoard() {
     setToast({ message, type });
     setTimeout(() => setToast(null), 2500);
   }
+
+  function requestConfirm(message, onConfirm, confirmLabel = "Delete") {
+    setConfirmDialog({ message, onConfirm, confirmLabel });
+  }
+
+  // Dismiss the confirm dialog on Escape (desktop / hardware keyboards).
+  useEffect(() => {
+    if (!confirmDialog) return;
+    const onKey = (e) => { if (e.key === "Escape") setConfirmDialog(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [confirmDialog]);
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -588,10 +621,10 @@ export default function BetBoard() {
   }
 
   return (
-    <div className="min-h-screen bg-[#282a36] text-[#f8f8f2] pb-24">
-      <div className="px-4 pt-6 pb-4 border-b border-[#44475a] max-w-md mx-auto">
-        <h1 className="text-2xl font-bold tracking-tight text-[#f8f8f2]">Bet Board</h1>
-        <p className="text-sm text-[#6272a4] mt-1">Every pick, one place.</p>
+    <div className="min-h-screen bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
+      <div className="px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] max-w-md mx-auto flex items-baseline justify-between gap-2">
+        <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">Bet Board</h1>
+        <p className="text-xs text-[#6272a4] flex-shrink-0">Every pick, one place.</p>
       </div>
 
       <div className="max-w-md mx-auto px-4 pt-4">
@@ -609,6 +642,10 @@ export default function BetBoard() {
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">NFL</span>
+                      <button onClick={() => deleteSport("NFL")} aria-label="Delete all NFL"
+                        className="text-[#6272a4] active:text-[#ff5555] active:bg-[#343746] p-1.5 -m-1 rounded-lg">
+                        <Trash2 size={15} />
+                      </button>
                     </div>
                     <div className="space-y-2">
                       {[...games]
@@ -622,14 +659,15 @@ export default function BetBoard() {
                               <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#44475a]">
                                 <div className="flex items-center gap-2">
                                   <span className="text-sm font-semibold text-[#f8f8f2]">{game.label}</span>
-                                  {game.gameTime && <span className="text-xs text-[#44475a]">{game.gameTime}</span>}
+                                  {game.gameTime && <span className="text-xs text-[#6272a4]">{game.gameTime}</span>}
                                 </div>
-                                <button onClick={() => deleteGame(game.id)} className="text-[#6272a4] hover:text-[#ff5555]">
-                                  <Trash2 size={13} />
+                                <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
+                                  className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36]">
+                                  <Trash2 size={16} />
                                 </button>
                               </div>
                               {gamePicks.length === 0 ? (
-                                <div className="px-3 py-2 text-xs text-[#44475a]">No picks for this game yet.</div>
+                                <div className="px-3 py-2 text-xs text-[#6272a4]">No picks for this game yet.</div>
                               ) : (
                                 <div className="divide-y divide-[#44475a]">
                                   {gamePicks.map((pick) => (
@@ -671,7 +709,13 @@ export default function BetBoard() {
                   if (sportPicks.length === 0) return null;
                   return (
                     <div key={sport}>
-                      <div className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold mb-2">{sport}</div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">{sport}</span>
+                        <button onClick={() => deleteSport(sport)} aria-label={`Delete all ${sport}`}
+                          className="text-[#6272a4] active:text-[#ff5555] active:bg-[#343746] p-1.5 -m-1 rounded-lg">
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                       <div className="bg-[#343746] border border-[#44475a] rounded-lg divide-y divide-[#44475a]">
                         {sportPicks.map((pick) => (
                           <PickCard key={pick.id} pick={pick} sport={sport}
@@ -697,7 +741,7 @@ export default function BetBoard() {
               <div className="mt-1 flex flex-wrap gap-2">
                 {LEAGUES.map((l) => (
                   <button key={l} onClick={() => { setSelectedSport(l); if (l !== "NFL") setSelectedGameId(null); }}
-                    className={`px-3 py-1.5 rounded-lg text-sm border ${
+                    className={`px-3.5 py-2 rounded-lg text-sm border active:scale-95 transition-transform ${
                       selectedSport === l
                         ? "bg-[#bd93f9]/15 border-[#bd93f9]/60 text-[#bd93f9]"
                         : "bg-[#343746] border-[#44475a] text-[#6272a4]"
@@ -718,7 +762,7 @@ export default function BetBoard() {
                     .map((g) => (
                       <button key={g.id}
                         onClick={() => setSelectedGameId(selectedGameId === g.id ? null : g.id)}
-                        className={`px-3 py-1.5 rounded-lg text-sm border ${
+                        className={`px-3.5 py-2 rounded-lg text-sm border active:scale-95 transition-transform ${
                           selectedGameId === g.id
                             ? "bg-[#bd93f9]/15 border-[#bd93f9]/60 text-[#bd93f9]"
                             : "bg-[#343746] border-[#44475a] text-[#6272a4]"
@@ -875,8 +919,8 @@ export default function BetBoard() {
             {selectedSport && (
               <>
                 <button onClick={addPick} disabled={!canSubmitPick()}
-                  className={`w-full py-3 rounded-lg font-semibold ${
-                    canSubmitPick() ? "bg-[#bd93f9] text-[#282a36]" : "bg-[#21222c] text-[#44475a] cursor-not-allowed"
+                  className={`w-full py-3.5 rounded-lg font-semibold transition-transform ${
+                    canSubmitPick() ? "bg-[#bd93f9] text-[#282a36] active:scale-[0.98]" : "bg-[#21222c] text-[#44475a] cursor-not-allowed"
                   }`}>
                   Add pick
                 </button>
@@ -959,25 +1003,31 @@ export default function BetBoard() {
                   const expanded = expandedSourceId === s.id;
                   const defaultTier = s.defaultTier || s.tier || "B";
                   return (
-                    <div key={s.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
-                      <div className="flex items-center gap-2 px-3 py-2">
+                    <div key={s.id} className="bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5">
+                      <div className="flex items-center gap-2">
                         <button onClick={() => setExpandedSourceId(expanded ? null : s.id)}
-                          className="flex-1 text-left text-sm text-[#f8f8f2] truncate">
-                          {s.name}
+                          className="flex-1 text-left text-sm text-[#f8f8f2] truncate flex items-center gap-1.5">
+                          <span className="truncate">{s.name}</span>
+                          {expanded ? <ChevronUp size={15} className="text-[#6272a4] flex-shrink-0" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0" />}
                         </button>
-                        <span className="text-[10px] text-[#6272a4] flex-shrink-0">default</span>
-                        {["A","B","C"].map((t) => (
-                          <button key={t} onClick={() => updateSourceDefaultTier(s.id, t)}
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold border ${defaultTier === t ? TIER_BADGE_CLASS[t] : "bg-[#282a36] border-[#44475a] text-[#44475a]"}`}>
-                            {t}
-                          </button>
-                        ))}
-                        <button onClick={() => deleteSource(s.id)} className="text-[#44475a] hover:text-[#ff5555] flex-shrink-0">
-                          <Trash2 size={14} />
+                        <button onClick={() => deleteSource(s.id)} aria-label="Delete source"
+                          className="text-[#6272a4] active:text-[#ff5555] active:bg-[#282a36] p-2 -mr-1 rounded-lg flex-shrink-0">
+                          <Trash2 size={16} />
                         </button>
                       </div>
+                      <div className="flex items-center gap-2 mt-2">
+                        <span className="text-[10px] uppercase tracking-wide text-[#6272a4] flex-shrink-0">Default tier</span>
+                        <div className="flex gap-1.5 ml-auto">
+                          {["A","B","C"].map((t) => (
+                            <button key={t} onClick={() => updateSourceDefaultTier(s.id, t)}
+                              className={`px-3 py-1.5 rounded-lg text-xs font-bold border active:scale-95 transition-transform ${defaultTier === t ? TIER_BADGE_CLASS[t] : "bg-[#282a36] border-[#44475a] text-[#6272a4]"}`}>
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                       {expanded && (
-                        <div className="border-t border-[#44475a] px-3 py-2.5 space-y-2">
+                        <div className="border-t border-[#44475a] -mx-3 px-3 mt-2.5 pt-2.5 space-y-2">
                           <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Per-sport overrides</div>
                           <div className="grid grid-cols-1 gap-1.5">
                             {LEAGUES.map((league) => {
@@ -985,15 +1035,15 @@ export default function BetBoard() {
                               return (
                                 <div key={league} className="flex items-center gap-2">
                                   <span className="text-xs text-[#6272a4] w-20 flex-shrink-0">{league}</span>
-                                  <div className="flex gap-1">
+                                  <div className="flex gap-1.5">
                                     {["A","B","C"].map((t) => (
                                       <button key={t} onClick={() => updateSourceSportTier(s.id, league, sportTier === t ? null : t)}
-                                        className={`px-2 py-0.5 rounded text-[10px] font-bold border ${sportTier === t ? TIER_BADGE_CLASS[t] : "bg-[#282a36] border-[#44475a] text-[#44475a]"}`}>
+                                        className={`px-2.5 py-1 rounded-lg text-xs font-bold border active:scale-95 transition-transform ${sportTier === t ? TIER_BADGE_CLASS[t] : "bg-[#282a36] border-[#44475a] text-[#6272a4]"}`}>
                                         {t}
                                       </button>
                                     ))}
                                     {sportTier && (
-                                      <span className="text-[10px] text-[#44475a] ml-1 self-center">override</span>
+                                      <span className="text-[10px] text-[#6272a4] ml-1 self-center">override</span>
                                     )}
                                     {!sportTier && (
                                       <span className="text-[10px] text-[#6272a4] ml-1 self-center">→ {defaultTier}</span>
@@ -1014,9 +1064,40 @@ export default function BetBoard() {
         )}
       </div>
 
+      {/* Confirm dialog */}
+      {confirmDialog && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-black/60"
+          onClick={() => setConfirmDialog(null)}
+          role="dialog"
+          aria-modal="true"
+        >
+          <div
+            className="w-full max-w-xs bg-[#343746] border border-[#44475a] rounded-2xl p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm text-[#f8f8f2] leading-relaxed">{confirmDialog.message}</p>
+            <div className="mt-5 flex gap-2">
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 py-2.5 rounded-lg text-sm font-medium bg-[#282a36] text-[#f8f8f2] border border-[#44475a] active:scale-[0.98] transition-transform"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { confirmDialog.onConfirm?.(); setConfirmDialog(null); }}
+                className="flex-1 py-2.5 rounded-lg text-sm font-semibold bg-[#ff5555] text-[#282a36] active:scale-[0.98] transition-transform"
+              >
+                {confirmDialog.confirmLabel || "Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Toast */}
       {toast && (
-        <div className={`fixed bottom-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-full shadow-lg text-sm font-medium transition-all ${
+        <div className={`fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2.5 rounded-full shadow-lg text-sm font-medium transition-all ${
           toast.type === "remove"
             ? "bg-[#ff5555]/15 border border-[#ff5555]/40 text-[#ff5555]"
             : "bg-[#50fa7b]/15 border border-[#50fa7b]/40 text-[#50fa7b]"
@@ -1028,7 +1109,7 @@ export default function BetBoard() {
         </div>
       )}
 
-      <div className="fixed bottom-0 inset-x-0 bg-[#343746] border-t border-[#44475a]">
+      <div className="fixed bottom-0 inset-x-0 bg-[#343746] border-t border-[#44475a] pb-safe">
         <div className="max-w-md mx-auto flex">
           {[
             { key: "board", label: "Board", Icon: ClipboardList },
@@ -1038,11 +1119,11 @@ export default function BetBoard() {
             <button
               key={key}
               onClick={() => setActiveTab(key)}
-              className={`flex-1 py-3 flex flex-col items-center gap-1 text-xs font-medium ${
+              className={`flex-1 min-h-[56px] py-3 flex flex-col items-center justify-center gap-1 text-xs font-medium transition-colors active:bg-[#282a36] ${
                 activeTab === key ? "text-[#bd93f9]" : "text-[#6272a4]"
               }`}
             >
-              <Icon size={18} />
+              <Icon size={20} />
               {label}
             </button>
           ))}
