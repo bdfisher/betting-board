@@ -364,6 +364,9 @@ export default function BetBoard() {
   const [bulkPasteText, setBulkPasteText] = useState("");
   const [bulkDefaultTier, setBulkDefaultTier] = useState("B");
   const [expandedSourceId, setExpandedSourceId] = useState(null);
+  const [exportJson, setExportJson] = useState("");
+  const [importJson, setImportJson] = useState("");
+  const [importError, setImportError] = useState("");
 
   // add flow state
   const [selectedSport, setSelectedSport] = useState(null);
@@ -425,6 +428,10 @@ export default function BetBoard() {
     };
   }, []);
 
+  useEffect(() => {
+    updateExportJson(sources);
+  }, [sources]);
+
   const persistSettings = useCallback(async (nextSources, nextUnit) => {
     try {
       await storage.set("settings", JSON.stringify({ sources: nextSources, unitValue: nextUnit }));
@@ -457,6 +464,70 @@ export default function BetBoard() {
     const next = [...sources, ...newSources];
     setSources(next); persistSettings(next, unitValue);
     setBulkPasteText("");
+  }
+
+  function getSourceExportData(source) {
+    return {
+      name: source.name,
+      rating: source.defaultTier || source.tier || "B",
+      sportRatings: source.sportTiers || {},
+    };
+  }
+
+  function updateExportJson(nextSources) {
+    setExportJson(JSON.stringify(nextSources.map(getSourceExportData), null, 2));
+  }
+
+  function addImportedSources(items) {
+    const existingNames = new Set(sources.map((s) => s.name.toLowerCase()));
+    const newSources = items
+      .map((item) => {
+        if (!item || typeof item.name !== "string" || !item.name.trim()) return null;
+        const name = item.name.trim();
+        if (existingNames.has(name.toLowerCase())) return null;
+        const defaultTier = item.rating || item.defaultTier || item.tier || "B";
+        const sportTiers = item.sportRatings || item.sportTiers || {};
+        existingNames.add(name.toLowerCase());
+        return { id: uid(), name, defaultTier, sportTiers };
+      })
+      .filter(Boolean);
+    if (!newSources.length) return [];
+    const next = [...sources, ...newSources];
+    setSources(next);
+    persistSettings(next, unitValue);
+    return newSources;
+  }
+
+  async function copyExportToClipboard() {
+    try {
+      await navigator.clipboard.writeText(exportJson);
+      showToast("Source export copied", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("Copy failed; use the export text manually", "remove");
+    }
+  }
+
+  function importSources() {
+    setImportError("");
+    let parsed;
+    try {
+      parsed = JSON.parse(importJson);
+    } catch (e) {
+      setImportError("Invalid JSON. Paste the export output exactly.");
+      return;
+    }
+    if (!Array.isArray(parsed)) {
+      setImportError("Import data must be an array of sources.");
+      return;
+    }
+    const added = addImportedSources(parsed);
+    if (added.length === 0) {
+      setImportError("No new sources were imported. Remove duplicates or add missing names.");
+      return;
+    }
+    setImportJson("");
+    showToast(`Imported ${added.length} source${added.length === 1 ? "" : "s"}`);
   }
 
   function updateSourceDefaultTier(id, tier) {
@@ -1060,6 +1131,35 @@ export default function BetBoard() {
                     Add all
                   </button>
                 </div>
+              </div>
+            </div>
+
+            <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Export sources</div>
+                  <p className="text-sm text-[#6272a4]">Copy your source ratings for backup or import into a new account.</p>
+                </div>
+                <button onClick={copyExportToClipboard}
+                  className="rounded-lg px-3 py-2 text-sm font-medium bg-[#bd93f9] text-[#282a36]">
+                  Copy export
+                </button>
+              </div>
+              <textarea readOnly value={exportJson} rows={6}
+                className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]" />
+
+              <div className="pt-3 border-t border-[#44475a] space-y-2">
+                <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Import sources</div>
+                <textarea value={importJson} onChange={(e) => setImportJson(e.target.value)}
+                  autoCapitalize="off" autoCorrect="off" spellCheck={false}
+                  placeholder="Paste exported sources JSON here"
+                  rows={6}
+                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4] text-[#f8f8f2]" />
+                {importError && <p className="text-xs text-[#ff5555]">{importError}</p>}
+                <button onClick={importSources} disabled={!importJson.trim()}
+                  className="w-full rounded-lg px-3 py-2 text-sm font-medium bg-[#bd93f9] text-[#282a36] disabled:bg-[#21222c] disabled:text-[#44475a]">
+                  Import sources
+                </button>
               </div>
             </div>
 
