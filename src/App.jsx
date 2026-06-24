@@ -793,7 +793,7 @@ export default function BetBoard() {
             ) : (
               <>
                 {/* ── NFL section ── */}
-                {(games.length > 0 || picks.some((p) => p.sport === "NFL")) && (() => {
+                {((games.filter((g) => g.sport === "NFL").length > 0) || picks.some((p) => p.sport === "NFL")) && (() => {
                   const nflCollapsed = collapsedSports.has("NFL");
                   const nflCount = picks.filter((p) => p.sport === "NFL").length;
                   return (
