@@ -55,7 +55,7 @@ export default function AuthGate({ children }) {
 
   if (session === undefined) {
     return (
-      <div className="min-h-screen bg-[#282a36] text-[#f8f8f2] flex items-center justify-center">
+      <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] flex items-center justify-center">
         <div className="text-[#6272a4] text-sm">Loading…</div>
       </div>
     );
@@ -63,7 +63,7 @@ export default function AuthGate({ children }) {
 
   if (!session) {
     return (
-      <div className="min-h-screen bg-[#282a36] text-[#f8f8f2] flex items-center justify-center p-6">
+      <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] flex items-center justify-center p-6">
         <div className="w-full max-w-sm space-y-5">
           <div className="text-center">
             <h1 className="text-2xl font-bold">Bet Board</h1>

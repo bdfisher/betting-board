@@ -6,6 +6,7 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   ClipboardList,
   PlusCircle,
   Settings,
@@ -270,7 +271,7 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
                   </div>
                   <button
                     onClick={() => updatePickSources(pick.id, (pick.sources || []).filter((ps) => ps.sourceId !== src.id))}
-                    className="text-[#6272a4] active:text-[#ff5555] text-base leading-none px-2 py-1 -my-1"
+                    className="text-[#6272a4] active:text-[#ff5555] text-base leading-none px-2.5 py-2 -my-1.5 -mr-1.5"
                   >×</button>
                 </div>
               );
@@ -288,6 +289,7 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
                   value={srcSearch}
                   onChange={(e) => { setSrcSearch(e.target.value); openDrop(); }}
                   onFocus={openDrop}
+                  autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                   placeholder="Add a source…"
                   className="flex-1 bg-transparent text-xs text-[#f8f8f2] placeholder-[#44475a] outline-none"
                 />
@@ -366,6 +368,8 @@ export default function BetBoard() {
   const [addMultiple, setAddMultiple] = useState(false);
   const [savedFlash, setSavedFlash] = useState(null);
   const [expandedPickId, setExpandedPickId] = useState(null);
+  const [collapsedSports, setCollapsedSports] = useState(new Set());
+  const [collapsedGames, setCollapsedGames] = useState(new Set());
   const [sourceSearch, setSourceSearch] = useState("");
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [toast, setToast] = useState(null); // { message, type: "success"|"remove" }
@@ -606,6 +610,22 @@ export default function BetBoard() {
     persistBoard(games, next);
   }
 
+  function toggleSportCollapsed(sport) {
+    setCollapsedSports((prev) => {
+      const n = new Set(prev);
+      n.has(sport) ? n.delete(sport) : n.add(sport);
+      return n;
+    });
+  }
+
+  function toggleGameCollapsed(id) {
+    setCollapsedGames((prev) => {
+      const n = new Set(prev);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  }
+
   function updateLineMoveStatus(id, val) {
     const next = picks.map((p) => p.id === id
       ? { ...p, lineMoveStatus: p.lineMoveStatus === val ? null : val }
@@ -627,14 +647,14 @@ export default function BetBoard() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[#282a36] flex items-center justify-center">
+      <div className="min-h-[100dvh] bg-[#282a36] flex items-center justify-center">
         <div className="text-[#6272a4] text-sm">Loading...</div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
+    <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
       <div className="px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] max-w-md mx-auto flex items-baseline justify-between gap-2">
         <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">Bet Board</h1>
         <p className="text-xs text-[#6272a4] flex-shrink-0">Every pick, one place.</p>
@@ -651,15 +671,24 @@ export default function BetBoard() {
             ) : (
               <>
                 {/* ── NFL section ── */}
-                {(games.length > 0 || picks.some((p) => p.sport === "NFL")) && (
+                {(games.length > 0 || picks.some((p) => p.sport === "NFL")) && (() => {
+                  const nflCollapsed = collapsedSports.has("NFL");
+                  const nflCount = picks.filter((p) => p.sport === "NFL").length;
+                  return (
                   <div>
                     <div className="flex items-center justify-between mb-2">
-                      <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">NFL</span>
+                      <button onClick={() => toggleSportCollapsed("NFL")} aria-expanded={!nflCollapsed}
+                        className="flex items-center gap-1.5 -ml-1 p-1 rounded-lg active:bg-[#343746]">
+                        {nflCollapsed ? <ChevronRight size={15} className="text-[#6272a4]" /> : <ChevronDown size={15} className="text-[#6272a4]" />}
+                        <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">NFL</span>
+                        {nflCollapsed && <span className="text-[10px] text-[#6272a4]">({nflCount})</span>}
+                      </button>
                       <button onClick={() => deleteSport("NFL")} aria-label="Delete all NFL"
                         className="text-[#6272a4] active:text-[#ff5555] active:bg-[#343746] p-1.5 -m-1 rounded-lg">
                         <Trash2 size={15} />
                       </button>
                     </div>
+                    {!nflCollapsed && (
                     <div className="space-y-2">
                       {[...games]
                         .sort((a, b) => (a.gameTime || "zzz").localeCompare(b.gameTime || "zzz"))
@@ -667,19 +696,23 @@ export default function BetBoard() {
                           const gamePicks = picks
                             .filter((p) => p.gameId === game.id)
                             .sort((a, b) => scorePick(b, sourcesMap, "NFL").total - scorePick(a, sourcesMap, "NFL").total);
+                          const gameCollapsed = collapsedGames.has(game.id);
                           return (
                             <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
-                              <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#44475a]">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-semibold text-[#f8f8f2]">{game.label}</span>
-                                  {game.gameTime && <span className="text-xs text-[#6272a4]">{game.gameTime}</span>}
-                                </div>
+                              <div className={`flex items-center justify-between px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
+                                <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
+                                  className="flex items-center gap-1.5 min-w-0 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0" />}
+                                  <span className="text-sm font-semibold text-[#f8f8f2] truncate">{game.label}</span>
+                                  {game.gameTime && <span className="text-xs text-[#6272a4] flex-shrink-0">{game.gameTime}</span>}
+                                  {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
+                                </button>
                                 <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
-                                  className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36]">
+                                  className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
                                   <Trash2 size={16} />
                                 </button>
                               </div>
-                              {gamePicks.length === 0 ? (
+                              {!gameCollapsed && (gamePicks.length === 0 ? (
                                 <div className="px-3 py-2 text-xs text-[#6272a4]">No picks for this game yet.</div>
                               ) : (
                                 <div className="divide-y divide-[#44475a]">
@@ -690,7 +723,7 @@ export default function BetBoard() {
                                       toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
                                   ))}
                                 </div>
-                              )}
+                              ))}
                             </div>
                           );
                         })}
@@ -711,8 +744,10 @@ export default function BetBoard() {
                         </div>
                       )}
                     </div>
+                    )}
                   </div>
-                )}
+                  );
+                })()}
 
                 {/* ── Non-NFL sections grouped by sport ── */}
                 {LEAGUES.filter((l) => l !== "NFL").map((sport) => {
@@ -720,15 +755,22 @@ export default function BetBoard() {
                     .filter((p) => p.sport === sport)
                     .sort((a, b) => scorePick(b, sourcesMap, sport).total - scorePick(a, sourcesMap, sport).total);
                   if (sportPicks.length === 0) return null;
+                  const sportCollapsed = collapsedSports.has(sport);
                   return (
                     <div key={sport}>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">{sport}</span>
+                        <button onClick={() => toggleSportCollapsed(sport)} aria-expanded={!sportCollapsed}
+                          className="flex items-center gap-1.5 -ml-1 p-1 rounded-lg active:bg-[#343746]">
+                          {sportCollapsed ? <ChevronRight size={15} className="text-[#6272a4]" /> : <ChevronDown size={15} className="text-[#6272a4]" />}
+                          <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">{sport}</span>
+                          {sportCollapsed && <span className="text-[10px] text-[#6272a4]">({sportPicks.length})</span>}
+                        </button>
                         <button onClick={() => deleteSport(sport)} aria-label={`Delete all ${sport}`}
                           className="text-[#6272a4] active:text-[#ff5555] active:bg-[#343746] p-1.5 -m-1 rounded-lg">
                           <Trash2 size={15} />
                         </button>
                       </div>
+                      {!sportCollapsed && (
                       <div className="bg-[#343746] border border-[#44475a] rounded-lg divide-y divide-[#44475a]">
                         {sportPicks.map((pick) => (
                           <PickCard key={pick.id} pick={pick} sport={sport}
@@ -737,6 +779,7 @@ export default function BetBoard() {
                             toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
                         ))}
                       </div>
+                      )}
                     </div>
                   );
                 })}
@@ -785,7 +828,7 @@ export default function BetBoard() {
                     ))}
                   <button
                     onClick={() => setNewGameLabel(newGameLabel === null ? "" : null)}
-                    className="px-3 py-1.5 rounded-lg text-sm border border-dashed border-[#6272a4] text-[#6272a4]">
+                    className="px-3.5 py-2 rounded-lg text-sm border border-dashed border-[#6272a4] text-[#6272a4] active:scale-95 transition-transform">
                     + Game
                   </button>
                 </div>
@@ -793,7 +836,8 @@ export default function BetBoard() {
                 {newGameLabel !== null && (
                   <div className="mt-2 bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
                     <input type="text" value={newGameLabel} onChange={(e) => setNewGameLabel(e.target.value)}
-                      placeholder="e.g. Bills @ Chiefs"
+                      autoCorrect="off" spellCheck={false} autoComplete="off"
+                      placeholder="e.g. Broncos @ Lions"
                       className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]"
                       autoFocus />
                     <input type="text" value={newGameTime} onChange={(e) => setNewGameTime(e.target.value)}
@@ -830,7 +874,8 @@ export default function BetBoard() {
                 <label className="text-xs uppercase tracking-wide text-[#6272a4]">Pick</label>
                 <input type="text" value={pickLabel} onChange={(e) => setPickLabel(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && canSubmitPick() && addPick()}
-                  placeholder="e.g. Chiefs -3.5, Over 47.5, Mahomes 300+ yds"
+                  autoCorrect="off" spellCheck={false} autoComplete="off" enterKeyHint="done"
+                  placeholder="e.g. Broncos -3.5, Over 47.5, Nix 300+ yds"
                   className="mt-1 w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]" />
               </div>
             )}
@@ -861,7 +906,8 @@ export default function BetBoard() {
                             <span className={`text-[10px] px-1 py-px rounded ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
                             <button
                               onClick={(e) => { e.stopPropagation(); setSelectedSourceIds((prev) => { const n = new Set(prev); n.delete(id); return n; }); }}
-                              className="text-[#50fa7b] hover:text-[#69ff94] ml-0.5 leading-none"
+                              className="text-[#50fa7b] hover:text-[#69ff94] leading-none text-sm px-1.5 py-1 -my-1 -mr-1.5"
+                              aria-label={`Remove ${src.name}`}
                             >×</button>
                           </span>
                         );
@@ -871,6 +917,7 @@ export default function BetBoard() {
                         value={sourceSearch}
                         onChange={(e) => { setSourceSearch(e.target.value); setSourceDropdownOpen(true); }}
                         onFocus={() => setSourceDropdownOpen(true)}
+                        autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                         placeholder={selectedSourceIds.size === 0 ? "Search sources…" : ""}
                         className="flex-1 min-w-[100px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#44475a] outline-none py-0.5"
                       />
@@ -964,6 +1011,7 @@ export default function BetBoard() {
                 <span className="text-[#6272a4]">$</span>
                 <input
                   type="number"
+                  inputMode="decimal"
                   value={unitValue}
                   onChange={(e) => setUnitValue(e.target.value)}
                   onBlur={() => persistSettings(sources, unitValue)}
@@ -979,6 +1027,7 @@ export default function BetBoard() {
               <div className="mt-1 flex gap-2">
                 <input type="text" value={newSourceName} onChange={(e) => setNewSourceName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && addSource()}
+                  autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                   placeholder="One name or handle"
                   className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
                 <button onClick={addSource} className="bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2">
@@ -987,6 +1036,7 @@ export default function BetBoard() {
               </div>
               <div className="mt-2 space-y-2">
                 <textarea value={bulkPasteText} onChange={(e) => setBulkPasteText(e.target.value)}
+                  autoCapitalize="off" autoCorrect="off" spellCheck={false}
                   placeholder={"Or paste many at once, one per line:\n@CapperA\n@CapperB\nBestBets.com"}
                   rows={4}
                   className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />

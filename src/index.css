@@ -17,6 +17,25 @@ select {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Buttons: kill the iOS double-tap-to-zoom gesture (so rapid toggling of
+   star/check/collapse never zooms the page) and prevent the label text from
+   being selected on long-press / fast taps. */
+button {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Dark background everywhere so the notch / status-bar / overscroll areas
+   never flash white behind the app (content paints into them via
+   viewport-fit=cover). */
+html,
+body,
+#root {
+  min-height: 100%;
+  background-color: #282a36;
+}
+
 /* Let content paint into the notch / status-bar area (viewport-fit=cover). */
 body {
   overscroll-behavior-y: none;
