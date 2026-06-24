@@ -11,9 +11,29 @@ export default function AuthGate({ children }) {
   const [session, setSession] = useState(isSupabaseConfigured ? undefined : null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState("idle"); // idle | submitting | checkEmail | error
+  const [status, setStatus] = useState("idle"); // idle | submitting | checkEmail | magic-sent | error
   const [errorMsg, setErrorMsg] = useState("");
   const [authMode, setAuthMode] = useState("sign-in"); // sign-in | sign-up
+
+  async function sendMagicLink(e) {
+    e.preventDefault();
+    const addr = email.trim();
+    if (!addr) return;
+    setStatus("submitting");
+    setErrorMsg("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: addr,
+      options: {
+        emailRedirectTo: window.location.origin + import.meta.env.BASE_URL,
+      },
+    });
+    if (error) {
+      setStatus("error");
+      setErrorMsg(error.message);
+    } else {
+      setStatus("magic-sent");
+    }
+  }
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -116,22 +136,35 @@ export default function AuthGate({ children }) {
                   We sent a confirmation email to <span className="text-[#f8f8f2]">{email.trim()}</span>. Follow the link to finish signing up.
                 </p>
               </div>
+            ) : status === "magic-sent" ? (
+              <div className="bg-[#343746] border border-[#50fa7b]/40 rounded-lg p-4 text-sm text-center">
+                <p className="text-[#50fa7b] font-medium">Magic link sent</p>
+                <p className="mt-1 text-[#6272a4]">
+                  We sent a sign-in link to <span className="text-[#f8f8f2]">{email.trim()}</span>. Open it from your email to continue.
+                </p>
+              </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-3">
                 <input
+                  id="email"
+                  name="email"
                   type="email"
                   required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
+                  autoComplete="email"
                   className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]"
                 />
                 <input
+                  id="password"
+                  name="password"
                   type="password"
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="Password"
+                  autoComplete={authMode === "sign-in" ? "current-password" : "new-password"}
                   className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]"
                 />
                 <button
@@ -145,6 +178,18 @@ export default function AuthGate({ children }) {
                 </button>
                 {status === "error" && (
                   <p className="text-xs text-[#ff5555]">{errorMsg || "Something went wrong. Try again."}</p>
+                )}
+                {authMode === "sign-in" && (
+                  <div className="pt-2 text-center">
+                    <button
+                      type="button"
+                      onClick={sendMagicLink}
+                      disabled={!email.trim() || status === "submitting"}
+                      className="text-xs font-semibold text-[#8be9fd] hover:text-[#f8f8f2]"
+                    >
+                      Send a magic link instead
+                    </button>
+                  </div>
                 )}
               </form>
             )}
