@@ -10,6 +10,7 @@ import {
   PlusCircle,
   Settings,
   Star,
+  Check,
   CheckCircle2,
   XCircle,
 } from "lucide-react";
@@ -162,7 +163,7 @@ function lineWithinTolerance(line1, line2, market) {
   return Math.abs(Number(line1) - Number(line2)) <= tol;
 }
 
-function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, deletePick, updatePickSources }) {
+function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources }) {
   const expanded = expandedPickId === pick.id;
   const score = scorePick(pick, sourcesMap, sport);
   const decision = scoreToDecision(score.total);
@@ -197,7 +198,7 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
               {pickSources.length}×
             </span>
           )}
-          <span className="text-sm text-[#f8f8f2] truncate">{pickDisplayLabel(pick, null)}</span>
+          <span className={`text-sm truncate ${pick.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{pickDisplayLabel(pick, null)}</span>
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${decision.bgCls} ${decision.textCls}`}>
@@ -212,6 +213,11 @@ function PickCard({ pick, sport, sources, sourcesMap, expandedPickId, setExpande
         <button onClick={() => toggleStar(pick.id)} aria-label={pick.star ? "Unstar pick" : "Star pick"}
           className={`flex-shrink-0 p-2 -ml-2 rounded-lg active:bg-[#282a36] ${pick.star ? "text-[#bd93f9]" : "text-[#6272a4]"}`}>
           <Star size={17} fill={pick.star ? "currentColor" : "none"} />
+        </button>
+        <button onClick={() => togglePlaced(pick.id)} aria-label={pick.placed ? "Mark as not placed" : "Mark as placed"}
+          aria-pressed={!!pick.placed}
+          className={`flex-shrink-0 p-2 rounded-lg active:bg-[#282a36] ${pick.placed ? "text-[#50fa7b]" : "text-[#6272a4]"}`}>
+          <Check size={17} strokeWidth={pick.placed ? 3 : 2} />
         </button>
         <button onClick={() => deletePick(pick.id)} aria-label="Delete pick"
           className="ml-auto p-2 -mr-2 rounded-lg text-[#6272a4] active:bg-[#282a36] active:text-[#ff5555] flex-shrink-0">
@@ -564,6 +570,7 @@ export default function BetBoard() {
       sport: selectedSport,
       sources: entries,
       star: false,
+      placed: false,
       lineMoveStatus: null,
       createdAt: new Date().toISOString(),
     };
@@ -589,6 +596,12 @@ export default function BetBoard() {
 
   function toggleStar(id) {
     const next = picks.map((p) => p.id === id ? { ...p, star: !p.star } : p);
+    setPicks(next);
+    persistBoard(games, next);
+  }
+
+  function togglePlaced(id) {
+    const next = picks.map((p) => p.id === id ? { ...p, placed: !p.placed } : p);
     setPicks(next);
     persistBoard(games, next);
   }
@@ -674,7 +687,7 @@ export default function BetBoard() {
                                     <PickCard key={pick.id} pick={pick} sport="NFL"
                                       sources={sources} sourcesMap={sourcesMap}
                                       expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                      toggleStar={toggleStar} deletePick={deletePick} updatePickSources={updatePickSources} />
+                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
                                   ))}
                                 </div>
                               )}
@@ -692,7 +705,7 @@ export default function BetBoard() {
                                 <PickCard key={pick.id} pick={pick} sport="NFL"
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                  toggleStar={toggleStar} deletePick={deletePick} updatePickSources={updatePickSources} />
+                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
                               ))}
                           </div>
                         </div>
@@ -721,7 +734,7 @@ export default function BetBoard() {
                           <PickCard key={pick.id} pick={pick} sport={sport}
                             sources={sources} sourcesMap={sourcesMap}
                             expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                            toggleStar={toggleStar} deletePick={deletePick} updatePickSources={updatePickSources} />
+                            toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} />
                         ))}
                       </div>
                     </div>
