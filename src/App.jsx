@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   XCircle,
 } from "lucide-react";
+import AddPickAutofill from "./AddPick";
 
 const LEAGUES = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "Golf", "Soccer", "Other"];
 
@@ -396,7 +397,8 @@ export default function BetBoard() {
   const [selectedSport, setSelectedSport] = useState(null);
   const [selectedGameId, setSelectedGameId] = useState(null);
   const [newGameLabel, setNewGameLabel] = useState(null);
-  const [newGameTime, setNewGameTime] = useState("");
+  const [newGameHHMM, setNewGameHHMM] = useState("");
+  const [newGameAmPm, setNewGameAmPm] = useState("PM");
   const [editingGameId, setEditingGameId] = useState(null);
   const [editingGameLabel, setEditingGameLabel] = useState("");
   const [editingGameTime, setEditingGameTime] = useState("");
@@ -584,13 +586,31 @@ export default function BetBoard() {
     if (!newGameLabel) return;
     const label = newGameLabel.trim();
     if (!label) return;
-    const game = { id: uid(), label, sport: selectedSport, gameTime: newGameTime.trim(), createdAt: new Date().toISOString() };
+    const gameTime = newGameHHMM.trim() ? `${newGameHHMM.trim()} ${newGameAmPm}` : "";
+    const game = { id: uid(), label, sport: selectedSport, gameTime, createdAt: new Date().toISOString() };
     const nextGames = [...games, game];
     setGames(nextGames);
     persistBoard(nextGames, picks);
     setSelectedGameId(game.id);
     setNewGameLabel(null);
-    setNewGameTime("");
+    setNewGameHHMM("");
+    setNewGameAmPm("PM");
+  }
+
+  // Import games supplied by the autofill component (mapped to app game shape)
+  function importGamesFromApi(newGames) {
+    if (!Array.isArray(newGames) || newGames.length === 0) return;
+    // avoid dupes by sport+label
+    const existing = new Set(games.filter((g) => g.sport).map((g) => `${g.sport}::${g.label}`));
+    const deduped = newGames.filter((ng) => !existing.has(`${ng.sport}::${ng.label}`));
+    if (deduped.length === 0) {
+      showToast("No new games to import", "remove");
+      return;
+    }
+    const nextGames = [...games, ...deduped];
+    setGames(nextGames);
+    persistBoard(nextGames, picks);
+    showToast(`Imported ${deduped.length} game${deduped.length === 1 ? "" : "s"}`);
   }
 
   function deleteGame(id) {
@@ -1038,6 +1058,10 @@ export default function BetBoard() {
               </div>
             </div>
 
+            {selectedSport && (
+              <AddPickAutofill selectedSport={selectedSport} onImportGames={importGamesFromApi} />
+            )}
+
             {/* Game picker */}
             {selectedSport && (
               <div>
@@ -1070,16 +1094,26 @@ export default function BetBoard() {
                       placeholder="e.g. Broncos @ Lions"
                       className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]"
                       autoFocus />
-                    <input type="text" value={newGameTime} onChange={(e) => setNewGameTime(e.target.value)}
-                      placeholder="Kickoff time, e.g. 1:00 PM ET (optional)"
-                      className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                    <div className="flex gap-2">
+                      <input type="text" value={newGameHHMM} onChange={(e) => setNewGameHHMM(e.target.value)}
+                        placeholder="7:30"
+                        className="flex-1 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                      <div className="flex rounded-lg overflow-hidden border border-[#44475a] flex-shrink-0">
+                        {["AM", "PM"].map((v) => (
+                          <button key={v} type="button" onClick={() => setNewGameAmPm(v)}
+                            className={`px-3 py-2 text-sm transition-colors ${newGameAmPm === v ? "bg-[#bd93f9] text-[#282a36] font-semibold" : "bg-[#282a36] text-[#6272a4]"}`}>
+                            {v}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                     <div className="flex gap-2">
                       <button onClick={() => { addGame(); setNewGameLabel(null); }}
                         disabled={!newGameLabel?.trim()}
                         className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold disabled:bg-[#21222c] disabled:text-[#44475a]">
                         Add game
                       </button>
-                      <button onClick={() => { setNewGameLabel(null); setNewGameTime(""); }}
+                      <button onClick={() => { setNewGameLabel(null); setNewGameHHMM(""); setNewGameAmPm("PM"); }}
                         className="px-4 py-2 rounded-lg text-sm bg-[#21222c] text-[#6272a4]">
                         Cancel
                       </button>

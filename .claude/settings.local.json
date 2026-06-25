@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:thedatadb.readme.io)",
+      "WebFetch(domain:www.thesportsdb.com)",
+      "Bash(gh api *)",
+      "WebFetch(domain:gist.github.com)",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard\")",
+      "Bash(python3 -c ' *)",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/football/nfl/scoreboard?week=1&seasontype=2&dates=2026\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=20260625\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard?dates=20260625\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260625\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard?dates=20260625\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/hockey/nhl/scoreboard?dates=20260625\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/basketball/mens-college-basketball/scoreboard?dates=20260101\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/football/college-football/scoreboard?dates=20261010\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard?dates=20260625\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard?dates=20260628\")",
+      "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=20260626\")",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/betting-board/)"
+    ]
+  }
+}
