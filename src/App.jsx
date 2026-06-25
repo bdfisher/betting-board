@@ -778,7 +778,7 @@ export default function BetBoard() {
   return (
     <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
       <div className="px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] max-w-md mx-auto flex items-baseline justify-between gap-2">
-        <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">Bet Board</h1>
+        <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">The Notebook</h1>
         <p className="text-xs text-[#6272a4] flex-shrink-0">Every pick, one place.</p>
       </div>
 
