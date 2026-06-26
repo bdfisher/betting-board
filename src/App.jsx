@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { storage } from "./storage";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import {
@@ -70,6 +70,15 @@ function scorePick(pick, sourcesMap, sport) {
   const starEdge = pick.star ? STAR_EDGE : 0;
   const edge = sourceEdge + starEdge;
   return { edge, sourceEdge, starEdge, aCount, srcCount: pickSrcDetails.length };
+}
+
+function scoreRung(rung, sourcesMap, sport) {
+  const srcDetails = (rung.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
+  const sortedEdges = srcDetails
+    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
+    .sort((a, b) => b - a);
+  const sourceEdge = sortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
+  return sourceEdge + (rung.star ? STAR_EDGE : 0);
 }
 
 function scoreToDecision(edge) {
@@ -195,16 +204,37 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
   const anchorUnits = decision.units;
   const pickSources = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
   const rungs = pick.rungs || [];
-  const rungUnits = (i) => anchorUnits * Math.pow(LADDER_RUNG_DECAY, i + 1);
+  // Returns { units, edge } for a rung.
+  // If the rung has its own sources/star, score them and cap at the anchor-decay ceiling.
+  // If the rung has no signal at all, fall back to pure anchor decay.
+  function rungSize(rung, i) {
+    const maxFromAnchor = anchorUnits * Math.pow(LADDER_RUNG_DECAY, i + 1);
+    const hasSig = (rung.sources || []).length > 0 || rung.star;
+    if (!hasSig) return { units: maxFromAnchor, edge: null };
+    const edge = scoreRung(rung, sourcesMap, sport);
+    return { units: Math.min(scoreToDecision(edge).units, maxFromAnchor), edge };
+  }
   const [srcSearch, setSrcSearch] = useState("");
   const [srcDropOpen, setSrcDropOpen] = useState(false);
   // Rung editor modal: null, or { rungId|null, label, star, sourceIds:Set, search }
   const [rungModal, setRungModal] = useState(null);
+  const [rungDropOpen, setRungDropOpen] = useState(false);
+  const [rungDropRect, setRungDropRect] = useState(null);
+  const rungSrcRef = useRef(null);
+
+  function openRungDrop() {
+    if (rungSrcRef.current) {
+      setRungDropRect(rungSrcRef.current.getBoundingClientRect());
+    }
+    setRungDropOpen(true);
+  }
 
   function openNewRung() {
+    setRungDropOpen(false);
     setRungModal({ rungId: null, label: "", star: false, sourceIds: new Set(), search: "" });
   }
   function openEditRung(rung) {
+    setRungDropOpen(false);
     setRungModal({
       rungId: rung.id,
       label: rung.label,
@@ -252,6 +282,26 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
     return `High conviction (2u) — sharp consensus (${reason})`;
   }
 
+  // Live sizing preview for the rung editor modal
+  const _rungIdx = rungModal
+    ? (rungModal.rungId ? rungs.findIndex((r) => r.id === rungModal.rungId) : rungs.length)
+    : 0;
+  const _maxFromAnchor = anchorUnits * Math.pow(LADDER_RUNG_DECAY, _rungIdx + 1);
+  const _modalSrcDetails = rungModal
+    ? [...rungModal.sourceIds].map((id) => sourcesMap[id]).filter(Boolean)
+    : [];
+  const _modalSortedEdges = _modalSrcDetails
+    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
+    .sort((a, b) => b - a);
+  const _modalSourceEdge = _modalSortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
+  const _modalStarEdge = rungModal?.star ? STAR_EDGE : 0;
+  const _modalTotalEdge = _modalSourceEdge + _modalStarEdge;
+  const _modalHasSig = !!(rungModal && (rungModal.sourceIds.size > 0 || rungModal.star));
+  const _modalRawDecision = scoreToDecision(_modalHasSig ? _modalTotalEdge : 0);
+  const _modalUnits = _modalHasSig
+    ? Math.min(_modalRawDecision.units, _maxFromAnchor)
+    : _maxFromAnchor;
+
   return (
     <div className="px-3 py-2.5">
       {/* Row 1: tap target for expand */}
@@ -295,7 +345,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
         <div className="mt-1.5 ml-3 pl-3 border-l-2 border-[#8be9fd]/30 space-y-1">
           {rungs.map((rung, i) => {
             const rSources = (rung.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
-            const u = rungUnits(i);
+            const { units: u, edge: rEdge } = rungSize(rung, i);
             return (
               <button key={rung.id} onClick={() => openEditRung(rung)}
                 className="w-full flex items-center gap-2 text-left py-1 active:opacity-70">
@@ -314,7 +364,9 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                     </div>
                   )}
                 </div>
-                <span className={`text-[10px] font-bold flex-shrink-0 ${u ? "text-[#50fa7b]" : "text-[#ff5555]"}`}>{fmtUnits(u)}</span>
+                <span className={`text-[10px] font-bold flex-shrink-0 ${u ? "text-[#50fa7b]" : "text-[#ff5555]"}`}>
+                  {rEdge != null ? `${rEdge.toFixed(1)} · ` : ""}{fmtUnits(u)}
+                </span>
               </button>
             );
           })}
@@ -504,38 +556,120 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
               {sources.length === 0 ? (
                 <div className="mt-1 text-xs text-[#6272a4]">No sources yet — add them in Setup.</div>
               ) : (
-                <>
-                  <input value={rungModal.search}
-                    onChange={(e) => setRungModal({ ...rungModal, search: e.target.value })}
-                    autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
-                    placeholder="Search sources…"
-                    className="mt-1 w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
-                  <div className="mt-1.5 max-h-44 overflow-y-auto rounded-lg border border-[#44475a] divide-y divide-[#44475a]">
-                    {sources
-                      .filter((s) => s.name.toLowerCase().includes(rungModal.search.toLowerCase()))
-                      .sort((a, b) => (TIER_EDGE[getSourceTier(b, sport)] || 0) - (TIER_EDGE[getSourceTier(a, sport)] || 0))
-                      .map((s) => {
-                        const active = rungModal.sourceIds.has(s.id);
-                        const tier = getSourceTier(s, sport);
-                        return (
-                          <button key={s.id}
-                            onClick={() => {
+                <div className="mt-1 relative">
+                  {/* Chips + search input */}
+                  <div ref={rungSrcRef}
+                    onClick={openRungDrop}
+                    className="min-h-[42px] bg-[#282a36] border border-[#44475a] rounded-lg px-2.5 py-1.5 flex flex-wrap gap-1.5 items-center cursor-text"
+                  >
+                    {[...rungModal.sourceIds].map((id) => {
+                      const src = sourcesMap[id];
+                      if (!src) return null;
+                      const tier = getSourceTier(src, sport);
+                      return (
+                        <span key={id} className="flex items-center gap-1 bg-[#50fa7b]/10 border border-[#50fa7b]/40 text-[#50fa7b] text-xs px-2 py-0.5 rounded-full">
+                          {src.name}
+                          <span className={`text-[10px] px-1 py-px rounded ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
                               const next = new Set(rungModal.sourceIds);
-                              active ? next.delete(s.id) : next.add(s.id);
+                              next.delete(id);
                               setRungModal({ ...rungModal, sourceIds: next });
                             }}
-                            className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left ${active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2]"}`}>
-                            <span>{s.name}</span>
-                            <div className="flex items-center gap-2">
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
-                              {active && <span className="text-[#50fa7b] text-xs">✓</span>}
-                            </div>
-                          </button>
-                        );
-                      })}
+                            className="text-[#50fa7b] leading-none text-sm px-1.5 py-1 -my-1 -mr-1.5"
+                          >×</button>
+                        </span>
+                      );
+                    })}
+                    <input
+                      type="text"
+                      value={rungModal.search}
+                      onChange={(e) => { setRungModal({ ...rungModal, search: e.target.value }); openRungDrop(); }}
+                      onFocus={openRungDrop}
+                      autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
+                      placeholder={rungModal.sourceIds.size === 0 ? "Search sources…" : ""}
+                      className="flex-1 min-w-[80px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#44475a] outline-none py-0.5"
+                    />
                   </div>
-                </>
+                  {/* Fixed dropdown — not clipped by modal's overflow-y-auto */}
+                  {rungDropOpen && rungDropRect && (
+                    <div
+                      className="fixed z-[70] bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-52"
+                      style={{ top: rungDropRect.bottom + 4, left: rungDropRect.left, width: rungDropRect.width }}
+                    >
+                      {sources
+                        .filter((s) => s.name.toLowerCase().includes(rungModal.search.toLowerCase()))
+                        .sort((a, b) => (TIER_EDGE[getSourceTier(b, sport)] || 0) - (TIER_EDGE[getSourceTier(a, sport)] || 0))
+                        .map((s) => {
+                          const active = rungModal.sourceIds.has(s.id);
+                          const tier = getSourceTier(s, sport);
+                          return (
+                            <button key={s.id}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                const next = new Set(rungModal.sourceIds);
+                                active ? next.delete(s.id) : next.add(s.id);
+                                setRungModal({ ...rungModal, sourceIds: next, search: "" });
+                                setRungDropOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 ${active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#21222c]"}`}>
+                              <span>{s.name}</span>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
+                                {active && <span className="text-[#50fa7b] text-xs">✓</span>}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      {sources.filter((s) => s.name.toLowerCase().includes(rungModal.search.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-2 text-xs text-[#6272a4]">
+                          {rungModal.search ? `No match for "${rungModal.search}"` : "All sources already added"}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {rungDropOpen && (
+                    <div className="fixed inset-0 z-[65]" onClick={() => { setRungDropOpen(false); setRungModal({ ...rungModal, search: "" }); }} />
+                  )}
+                </div>
               )}
+            </div>
+
+            {/* Sizing preview */}
+            <div className="bg-[#282a36] rounded-lg p-3 space-y-2 border border-[#44475a]">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Sizing preview</div>
+              <div className={`text-sm font-medium ${_modalUnits > 0 ? (_modalHasSig ? "text-[#50fa7b]" : "text-[#8be9fd]") : "text-[#ff5555]"}`}>
+                {!_modalHasSig
+                  ? `No rung signal — defaulting to anchor decay (${fmtUnits(_maxFromAnchor)})`
+                  : _modalUnits === 0
+                  ? "Pass — not enough signal on this rung"
+                  : `${fmtUnits(_modalUnits)}${_modalRawDecision.units > _maxFromAnchor ? ` (signal supports ${fmtUnits(_modalRawDecision.units)}, capped by anchor)` : ""}`}
+              </div>
+              <div className="space-y-1.5">
+                {[
+                  [_modalSrcDetails.length > 1 ? `Sources (${_modalSrcDetails.length} agree)` : "Sources", _modalSourceEdge],
+                  ["Personal star", _modalStarEdge],
+                ].map(([label, val]) => (
+                  <div key={label} className="flex items-center gap-2">
+                    <span className="text-xs text-[#6272a4] w-28 flex-shrink-0">{label}</span>
+                    <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
+                      <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 18) * 100)}%` }} />
+                    </div>
+                    <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0">{val.toFixed(1)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between pt-1 border-t border-[#44475a]">
+                  <span className="text-xs text-[#6272a4]">Rung edge</span>
+                  <span className={`text-sm font-bold ${_modalHasSig ? (_modalUnits > 0 ? "text-[#50fa7b]" : "text-[#ff5555]") : "text-[#6272a4]"}`}>
+                    {_modalHasSig ? _modalTotalEdge.toFixed(1) : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[#6272a4]">Anchor ceiling</span>
+                  <span className="text-xs text-[#8be9fd]">{fmtUnits(_maxFromAnchor)}</span>
+                </div>
+              </div>
             </div>
 
             {/* Actions */}
@@ -1386,7 +1520,7 @@ export default function BetBoard() {
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
                                   toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
-                                  movePickToGame={movePickToGame} />
+                                  movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
                               ))}
                             </div>
                           </div>
