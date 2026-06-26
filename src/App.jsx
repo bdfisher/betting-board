@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { storage } from "./storage";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import {
@@ -37,8 +37,18 @@ const TIER_BADGE_CLASS = {
   C: "bg-[#44475a]/60 text-[#f8f8f2] border border-[#6272a4]/50",
 };
 
-// ---- Scoring ----
-const TIER_WEIGHTS = { A: 60, B: 35, C: 15 };
+// ---- Scoring (hybrid edge model) ----
+// Each source contributes an "edge" by tier. Multiple sources on the same play
+// give diminishing returns (each additional agreeing capper counts less than the
+// last), so a consensus of solid (B) cappers can build toward a bet without ever
+// running away, while sharp (A) sources drive the top end. All tunable here.
+const TIER_EDGE = { A: 10, B: 4.5, C: 1.5 };
+const STAR_EDGE = 4;        // flat bump for your own conviction
+const SOURCE_DECAY = 0.6;   // each additional agreeing source counts 60% of the previous
+// Ladder rungs are one correlated thesis: the anchor rung gets a normal edge-based
+// size, and each step up the ladder is scaled down (each rung 55% of the previous)
+// since it's progressively less likely to hit.
+const LADDER_RUNG_DECAY = 0.55;
 const DECISIONS = [
   { key: "pass",     label: "Pass", units: 0,   textCls: "text-[#ff5555]",    bgCls: "bg-[#ff5555]/10 border-[#ff5555]/40" },
   { key: "small",    label: "0.5u", units: 0.5, textCls: "text-[#bd93f9]",   bgCls: "bg-[#bd93f9]/15 border-[#bd93f9]/40" },
@@ -50,20 +60,35 @@ const DECISION = Object.fromEntries(DECISIONS.map((d) => [d.key, d]));
 
 function scorePick(pick, sourcesMap, sport) {
   const pickSrcDetails = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
-  const sourceScore = pickSrcDetails.reduce((s, src) => s + (TIER_WEIGHTS[getSourceTier(src, sport)] || 0), 0);
+  // Sort source edges strongest-first, then sum with diminishing returns so each
+  // additional agreeing capper contributes SOURCE_DECAY^n of its tier edge.
+  const sortedEdges = pickSrcDetails
+    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
+    .sort((a, b) => b - a);
+  const sourceEdge = sortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
   const aCount = pickSrcDetails.filter((src) => getSourceTier(src, sport) === "A").length;
-  const starBonus = pick.star ? 20 : 0;
-  const total = Math.min(100, sourceScore + starBonus);
-  return { total, sourceScore, starBonus, aCount };
+  const starEdge = pick.star ? STAR_EDGE : 0;
+  const edge = sourceEdge + starEdge;
+  return { edge, sourceEdge, starEdge, aCount, srcCount: pickSrcDetails.length };
 }
 
-function scoreToDecision(total, aCount = 0) {
-  // 2u is only advisable when 2+ A-tier sources back the pick. Any other
-  // composition (a B-tier, A+C, A+B, …) is capped at 1.5u even if its raw
-  // score would otherwise clear the 2u bar.
-  if (total >= 85) return aCount >= 2 ? DECISION.high : DECISION.mid;
-  if (total >= 70) return DECISION.standard; // 1u
-  if (total >= 55) return DECISION.small;     // 0.5u
+function scoreRung(rung, sourcesMap, sport) {
+  const srcDetails = (rung.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
+  const sortedEdges = srcDetails
+    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
+    .sort((a, b) => b - a);
+  const sourceEdge = sortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
+  return sourceEdge + (rung.star ? STAR_EDGE : 0);
+}
+
+function scoreToDecision(edge) {
+  // Diminishing-returns edge ladder. A consensus of B-tier cappers asymptotes
+  // around ~11 (so it can reach 1u but never higher); sharp (A) consensus and a
+  // personal star are what push into 1.5u–2u territory.
+  if (edge >= 18) return DECISION.high;     // 2u
+  if (edge >= 14) return DECISION.mid;       // 1.5u
+  if (edge >= 10) return DECISION.standard;  // 1u
+  if (edge >= 7.5) return DECISION.small;    // 0.5u
   return DECISION.pass;
 }
 
@@ -128,10 +153,11 @@ function migrateGame(g) {
 
 // Migrate old picks — reconstruct label from structured fields
 function migratePick(pick) {
-  const migrated = pick.sources ? pick : {
+  let migrated = pick.sources ? pick : {
     ...pick,
     sources: [{ sourceId: pick.sourceId, line: pick.line || "", dateAdded: pick.createdAt }],
   };
+  if (!migrated.rungs) migrated = { ...migrated, rungs: [] };
   if (migrated.label) return migrated;
   // Reconstruct label from old structured fields
   const hasLine = migrated.line !== "" && migrated.line !== null && migrated.line !== undefined;
@@ -171,13 +197,71 @@ function lineWithinTolerance(line1, line2, market) {
   return Math.abs(Number(line1) - Number(line2)) <= tol;
 }
 
-function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources, movePickToGame }) {
+function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources, movePickToGame, updatePickRungs }) {
   const expanded = expandedPickId === pick.id;
   const score = scorePick(pick, sourcesMap, sport);
-  const decision = scoreToDecision(score.total, score.aCount);
+  const decision = scoreToDecision(score.edge);
+  const anchorUnits = decision.units;
   const pickSources = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
+  const rungs = pick.rungs || [];
+  // Returns { units, edge } for a rung.
+  // If the rung has its own sources/star, score them and cap at the anchor-decay ceiling.
+  // If the rung has no signal at all, fall back to pure anchor decay.
+  function rungSize(rung, i) {
+    const maxFromAnchor = anchorUnits * Math.pow(LADDER_RUNG_DECAY, i + 1);
+    const hasSig = (rung.sources || []).length > 0 || rung.star;
+    if (!hasSig) return { units: maxFromAnchor, edge: null };
+    const edge = scoreRung(rung, sourcesMap, sport);
+    return { units: Math.min(scoreToDecision(edge).units, maxFromAnchor), edge };
+  }
   const [srcSearch, setSrcSearch] = useState("");
   const [srcDropOpen, setSrcDropOpen] = useState(false);
+  // Rung editor modal: null, or { rungId|null, label, star, sourceIds:Set, search }
+  const [rungModal, setRungModal] = useState(null);
+  const [rungDropOpen, setRungDropOpen] = useState(false);
+  const [rungDropRect, setRungDropRect] = useState(null);
+  const rungSrcRef = useRef(null);
+
+  function openRungDrop() {
+    if (rungSrcRef.current) {
+      setRungDropRect(rungSrcRef.current.getBoundingClientRect());
+    }
+    setRungDropOpen(true);
+  }
+
+  function openNewRung() {
+    setRungDropOpen(false);
+    setRungModal({ rungId: null, label: "", star: false, sourceIds: new Set(), search: "" });
+  }
+  function openEditRung(rung) {
+    setRungDropOpen(false);
+    setRungModal({
+      rungId: rung.id,
+      label: rung.label,
+      star: !!rung.star,
+      sourceIds: new Set((rung.sources || []).map((s) => s.sourceId)),
+      search: "",
+    });
+  }
+  function saveRung() {
+    if (!rungModal || !rungModal.label.trim()) return;
+    const rung = {
+      id: rungModal.rungId || uid(),
+      label: rungModal.label.trim(),
+      sources: [...rungModal.sourceIds].map((id) => ({ sourceId: id })),
+      star: rungModal.star,
+    };
+    const next = rungModal.rungId
+      ? rungs.map((r) => (r.id === rung.id ? rung : r))
+      : [...rungs, rung];
+    updatePickRungs(pick.id, next);
+    setRungModal(null);
+  }
+  function deleteRung() {
+    if (!rungModal?.rungId) return;
+    updatePickRungs(pick.id, rungs.filter((r) => r.id !== rungModal.rungId));
+    setRungModal(null);
+  }
 
   const assignedGame = games.find((g) => g.id === pick.gameId) || null;
 
@@ -192,11 +276,31 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
     const starPart = pick.star ? ", personal star" : "";
     const reason = srcPart + starPart;
     if (decision.key === "pass") return `Pass — not enough signal (${reason})`;
-    if (decision.key === "small") return `Small (0.5u) — light signal (${reason})`;
+    if (decision.key === "small") return `Small (0.5u) — building consensus (${reason})`;
     if (decision.key === "standard") return `Standard (1u) — solid signal (${reason})`;
-    if (decision.key === "mid") return `1.5u — strong, but 2u needs 2+ A-tier sources (${reason})`;
-    return `High conviction (2u) — two or more A-tier sources agree (${reason})`;
+    if (decision.key === "mid") return `1.5u — strong signal (${reason})`;
+    return `High conviction (2u) — sharp consensus (${reason})`;
   }
+
+  // Live sizing preview for the rung editor modal
+  const _rungIdx = rungModal
+    ? (rungModal.rungId ? rungs.findIndex((r) => r.id === rungModal.rungId) : rungs.length)
+    : 0;
+  const _maxFromAnchor = anchorUnits * Math.pow(LADDER_RUNG_DECAY, _rungIdx + 1);
+  const _modalSrcDetails = rungModal
+    ? [...rungModal.sourceIds].map((id) => sourcesMap[id]).filter(Boolean)
+    : [];
+  const _modalSortedEdges = _modalSrcDetails
+    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
+    .sort((a, b) => b - a);
+  const _modalSourceEdge = _modalSortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
+  const _modalStarEdge = rungModal?.star ? STAR_EDGE : 0;
+  const _modalTotalEdge = _modalSourceEdge + _modalStarEdge;
+  const _modalHasSig = !!(rungModal && (rungModal.sourceIds.size > 0 || rungModal.star));
+  const _modalRawDecision = scoreToDecision(_modalHasSig ? _modalTotalEdge : 0);
+  const _modalUnits = _modalHasSig
+    ? Math.min(_modalRawDecision.units, _maxFromAnchor)
+    : _maxFromAnchor;
 
   return (
     <div className="px-3 py-2.5">
@@ -213,7 +317,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
         </div>
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${decision.bgCls} ${decision.textCls}`}>
-            {score.total} · {decision.label}
+            {score.edge.toFixed(1)} · {decision.label}
           </span>
           {expanded ? <ChevronUp size={16} className="text-[#6272a4]" /> : <ChevronDown size={16} className="text-[#6272a4]" />}
         </div>
@@ -236,30 +340,63 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
         </button>
       </div>
 
+      {/* Ladder rungs — attached to this pick. Tap a rung to edit sources/star. */}
+      {rungs.length > 0 && (
+        <div className="mt-1.5 ml-3 pl-3 border-l-2 border-[#8be9fd]/30 space-y-1">
+          {rungs.map((rung, i) => {
+            const rSources = (rung.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
+            const { units: u, edge: rEdge } = rungSize(rung, i);
+            return (
+              <button key={rung.id} onClick={() => openEditRung(rung)}
+                className="w-full flex items-center gap-2 text-left py-1 active:opacity-70">
+                <span className="text-[10px] text-[#8be9fd]/70 flex-shrink-0">↳</span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className={`text-xs truncate ${pick.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{rung.label}</span>
+                    {rung.star && <Star size={11} className="text-[#bd93f9] flex-shrink-0" fill="currentColor" />}
+                  </div>
+                  {rSources.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                      {rSources.map((src) => {
+                        const tier = getSourceTier(src, sport);
+                        return <span key={src.id} className={`text-[9px] px-1 py-px rounded ${TIER_BADGE_CLASS[tier]}`}>{src.name} {tier}</span>;
+                      })}
+                    </div>
+                  )}
+                </div>
+                <span className={`text-[10px] font-bold flex-shrink-0 ${u ? "text-[#50fa7b]" : "text-[#ff5555]"}`}>
+                  {rEdge != null ? `${rEdge.toFixed(1)} · ` : ""}{fmtUnits(u)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Inline score expansion */}
       {expanded && (
         <div className="mt-3 bg-[#282a36] rounded-lg p-3 space-y-3 border border-[#44475a]">
           {/* Recommendation */}
           <div className={`text-sm font-medium ${decision.textCls}`}>{sizeReason()}</div>
 
-          {/* Score breakdown */}
+          {/* Edge breakdown */}
           <div className="space-y-1.5">
-            <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Score breakdown</div>
+            <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Edge breakdown</div>
             {[
-              ["Sources", score.sourceScore, 80],
-              ["Personal star", score.starBonus, 20],
-            ].map(([label, val, max]) => (
+              [score.srcCount > 1 ? `Sources (${score.srcCount} agree)` : "Sources", score.sourceEdge],
+              ["Personal star", score.starEdge],
+            ].map(([label, val]) => (
               <div key={label} className="flex items-center gap-2">
                 <span className="text-xs text-[#6272a4] w-28 flex-shrink-0">{label}</span>
                 <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
-                  <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: max > 0 ? `${Math.min(100, (val / max) * 100)}%` : "0%" }} />
+                  <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 18) * 100)}%` }} />
                 </div>
-                <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0">{val}</span>
+                <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0">{val.toFixed(1)}</span>
               </div>
             ))}
             <div className="flex items-center justify-between pt-1 border-t border-[#44475a]">
-              <span className="text-xs text-[#6272a4]">Total</span>
-              <span className={`text-sm font-bold ${decision.textCls}`}>{score.total}/100</span>
+              <span className="text-xs text-[#6272a4]">Effective edge</span>
+              <span className={`text-sm font-bold ${decision.textCls}`}>{score.edge.toFixed(1)}</span>
             </div>
           </div>
 
@@ -333,7 +470,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                         const alreadyOn = (pick.sources || []).some((ps) => ps.sourceId === s.id);
                         return !alreadyOn && s.name.toLowerCase().includes(srcSearch.toLowerCase());
                       })
-                      .sort((a, b) => (TIER_WEIGHTS[getSourceTier(b, sport)] || 0) - (TIER_WEIGHTS[getSourceTier(a, sport)] || 0))
+                      .sort((a, b) => (TIER_EDGE[getSourceTier(b, sport)] || 0) - (TIER_EDGE[getSourceTier(a, sport)] || 0))
                       .map((s) => {
                         const tier = getSourceTier(s, sport);
                         return (
@@ -365,8 +502,259 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
               )}
             </div>
           </div>
+
+          {/* Ladder — rungs live on the pick; sizing scales off the anchor (this pick) */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-wide text-[#6272a4]">
+                Ladder{rungs.length > 0 ? ` · anchor ${fmtUnits(anchorUnits)}` : ""}
+              </span>
+              <button onClick={openNewRung}
+                className="text-[10px] font-semibold text-[#8be9fd] border border-[#8be9fd]/40 bg-[#8be9fd]/10 rounded-lg px-2 py-1 active:scale-95">
+                + {rungs.length > 0 ? "Rung" : "Ladder"}
+              </button>
+            </div>
+            {rungs.length === 0 && (
+              <p className="text-[10px] text-[#6272a4]">Add higher rungs of this pick. Each rung scales down from this pick's size; tap a rung to set its sources or star.</p>
+            )}
+          </div>
         </div>
       )}
+
+      {/* Rung editor modal */}
+      {rungModal && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-3"
+          onClick={() => setRungModal(null)}>
+          <div className="w-full max-w-md bg-[#343746] border border-[#44475a] rounded-xl p-4 space-y-3 max-h-[85dvh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-[#f8f8f2]">{rungModal.rungId ? "Edit rung" : "Add rung"}</span>
+              <span className="text-[10px] text-[#6272a4]">scales from anchor {fmtUnits(anchorUnits)}</span>
+            </div>
+
+            {/* Rung label */}
+            <div>
+              <label className="text-[10px] uppercase tracking-wide text-[#6272a4]">Rung</label>
+              <input value={rungModal.label} autoFocus
+                onChange={(e) => setRungModal({ ...rungModal, label: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Enter") saveRung(); }}
+                autoCorrect="off" spellCheck={false} autoComplete="off"
+                placeholder="e.g. 300+ pass yds"
+                className="mt-1 w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]" />
+            </div>
+
+            {/* Star */}
+            <button onClick={() => setRungModal({ ...rungModal, star: !rungModal.star })}
+              className="flex items-center gap-2 w-full">
+              <Star size={18} className={rungModal.star ? "text-[#bd93f9]" : "text-[#6272a4]"} fill={rungModal.star ? "currentColor" : "none"} />
+              <span className="text-sm text-[#f8f8f2]">Personal star</span>
+            </button>
+
+            {/* Sources */}
+            <div>
+              <label className="text-[10px] uppercase tracking-wide text-[#6272a4]">Sources</label>
+              {sources.length === 0 ? (
+                <div className="mt-1 text-xs text-[#6272a4]">No sources yet — add them in Setup.</div>
+              ) : (
+                <div className="mt-1 relative">
+                  {/* Chips + search input */}
+                  <div ref={rungSrcRef}
+                    onClick={openRungDrop}
+                    className="min-h-[42px] bg-[#282a36] border border-[#44475a] rounded-lg px-2.5 py-1.5 flex flex-wrap gap-1.5 items-center cursor-text"
+                  >
+                    {[...rungModal.sourceIds].map((id) => {
+                      const src = sourcesMap[id];
+                      if (!src) return null;
+                      const tier = getSourceTier(src, sport);
+                      return (
+                        <span key={id} className="flex items-center gap-1 bg-[#50fa7b]/10 border border-[#50fa7b]/40 text-[#50fa7b] text-xs px-2 py-0.5 rounded-full">
+                          {src.name}
+                          <span className={`text-[10px] px-1 py-px rounded ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const next = new Set(rungModal.sourceIds);
+                              next.delete(id);
+                              setRungModal({ ...rungModal, sourceIds: next });
+                            }}
+                            className="text-[#50fa7b] leading-none text-sm px-1.5 py-1 -my-1 -mr-1.5"
+                          >×</button>
+                        </span>
+                      );
+                    })}
+                    <input
+                      type="text"
+                      value={rungModal.search}
+                      onChange={(e) => { setRungModal({ ...rungModal, search: e.target.value }); openRungDrop(); }}
+                      onFocus={openRungDrop}
+                      autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
+                      placeholder={rungModal.sourceIds.size === 0 ? "Search sources…" : ""}
+                      className="flex-1 min-w-[80px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#44475a] outline-none py-0.5"
+                    />
+                  </div>
+                  {/* Fixed dropdown — not clipped by modal's overflow-y-auto */}
+                  {rungDropOpen && rungDropRect && (
+                    <div
+                      className="fixed z-[70] bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-52"
+                      style={{ top: rungDropRect.bottom + 4, left: rungDropRect.left, width: rungDropRect.width }}
+                    >
+                      {sources
+                        .filter((s) => s.name.toLowerCase().includes(rungModal.search.toLowerCase()))
+                        .sort((a, b) => (TIER_EDGE[getSourceTier(b, sport)] || 0) - (TIER_EDGE[getSourceTier(a, sport)] || 0))
+                        .map((s) => {
+                          const active = rungModal.sourceIds.has(s.id);
+                          const tier = getSourceTier(s, sport);
+                          return (
+                            <button key={s.id}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                const next = new Set(rungModal.sourceIds);
+                                active ? next.delete(s.id) : next.add(s.id);
+                                setRungModal({ ...rungModal, sourceIds: next, search: "" });
+                                setRungDropOpen(false);
+                              }}
+                              className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 ${active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#21222c]"}`}>
+                              <span>{s.name}</span>
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
+                                {active && <span className="text-[#50fa7b] text-xs">✓</span>}
+                              </div>
+                            </button>
+                          );
+                        })}
+                      {sources.filter((s) => s.name.toLowerCase().includes(rungModal.search.toLowerCase())).length === 0 && (
+                        <div className="px-3 py-2 text-xs text-[#6272a4]">
+                          {rungModal.search ? `No match for "${rungModal.search}"` : "All sources already added"}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  {rungDropOpen && (
+                    <div className="fixed inset-0 z-[65]" onClick={() => { setRungDropOpen(false); setRungModal({ ...rungModal, search: "" }); }} />
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Sizing preview */}
+            <div className="bg-[#282a36] rounded-lg p-3 space-y-2 border border-[#44475a]">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Sizing preview</div>
+              <div className={`text-sm font-medium ${_modalUnits > 0 ? (_modalHasSig ? "text-[#50fa7b]" : "text-[#8be9fd]") : "text-[#ff5555]"}`}>
+                {!_modalHasSig
+                  ? `No rung signal — defaulting to anchor decay (${fmtUnits(_maxFromAnchor)})`
+                  : _modalUnits === 0
+                  ? "Pass — not enough signal on this rung"
+                  : `${fmtUnits(_modalUnits)}${_modalRawDecision.units > _maxFromAnchor ? ` (signal supports ${fmtUnits(_modalRawDecision.units)}, capped by anchor)` : ""}`}
+              </div>
+              <div className="space-y-1.5">
+                {[
+                  [_modalSrcDetails.length > 1 ? `Sources (${_modalSrcDetails.length} agree)` : "Sources", _modalSourceEdge],
+                  ["Personal star", _modalStarEdge],
+                ].map(([label, val]) => (
+                  <div key={label} className="flex items-center gap-2">
+                    <span className="text-xs text-[#6272a4] w-28 flex-shrink-0">{label}</span>
+                    <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
+                      <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 18) * 100)}%` }} />
+                    </div>
+                    <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0">{val.toFixed(1)}</span>
+                  </div>
+                ))}
+                <div className="flex items-center justify-between pt-1 border-t border-[#44475a]">
+                  <span className="text-xs text-[#6272a4]">Rung edge</span>
+                  <span className={`text-sm font-bold ${_modalHasSig ? (_modalUnits > 0 ? "text-[#50fa7b]" : "text-[#ff5555]") : "text-[#6272a4]"}`}>
+                    {_modalHasSig ? _modalTotalEdge.toFixed(1) : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-[#6272a4]">Anchor ceiling</span>
+                  <span className="text-xs text-[#8be9fd]">{fmtUnits(_maxFromAnchor)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-2 pt-1">
+              <button onClick={saveRung} disabled={!rungModal.label.trim()}
+                className={`flex-1 rounded-lg py-2.5 text-sm font-semibold ${rungModal.label.trim() ? "bg-[#8be9fd] text-[#282a36] active:scale-[0.98]" : "bg-[#21222c] text-[#44475a]"}`}>
+                Save rung
+              </button>
+              {rungModal.rungId && (
+                <button onClick={deleteRung} aria-label="Delete rung"
+                  className="px-3 rounded-lg py-2.5 text-sm bg-[#21222c] border border-[#ff5555]/40 text-[#ff5555] active:bg-[#ff5555]/10">
+                  <Trash2 size={16} />
+                </button>
+              )}
+              <button onClick={() => setRungModal(null)}
+                className="px-4 rounded-lg py-2.5 text-sm bg-[#21222c] text-[#6272a4]">Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function fmtUnits(n) {
+  if (!n) return "Pass";
+  return `${+n.toFixed(2)}u`;
+}
+
+function TicketCard({ ticket, sourcesMap, toggleTicketStar, toggleTicketPlaced, deleteTicket }) {
+  const legs = ticket.legs || [];
+  return (
+    <div className="bg-[#343746] border border-[#44475a] rounded-lg">
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#44475a]">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border flex-shrink-0 bg-[#bd93f9]/15 text-[#bd93f9] border-[#bd93f9]/30">
+            Parlay
+          </span>
+          <span className={`text-sm font-semibold truncate ${ticket.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>
+            {ticket.name || `${legs.length}-leg parlay`}
+          </span>
+          <span className="text-[10px] text-[#6272a4] flex-shrink-0">{legs.length} legs</span>
+        </div>
+        <div className="flex items-center gap-0.5 flex-shrink-0">
+          <button onClick={() => toggleTicketStar(ticket.id)} aria-label={ticket.star ? "Unstar" : "Star"}
+            className={`p-2 -my-1 rounded-lg active:bg-[#282a36] ${ticket.star ? "text-[#bd93f9]" : "text-[#6272a4]"}`}>
+            <Star size={16} fill={ticket.star ? "currentColor" : "none"} />
+          </button>
+          <button onClick={() => toggleTicketPlaced(ticket.id)} aria-label={ticket.placed ? "Mark not placed" : "Mark placed"}
+            aria-pressed={!!ticket.placed}
+            className={`p-2 -my-1 rounded-lg active:bg-[#282a36] ${ticket.placed ? "text-[#50fa7b]" : "text-[#6272a4]"}`}>
+            <Check size={16} strokeWidth={ticket.placed ? 3 : 2} />
+          </button>
+          <button onClick={() => deleteTicket(ticket.id)} aria-label="Delete parlay"
+            className="p-2 -my-1 -mr-1 rounded-lg text-[#6272a4] active:text-[#ff5555] active:bg-[#282a36]">
+            <Trash2 size={16} />
+          </button>
+        </div>
+      </div>
+
+      <ol className="divide-y divide-[#44475a]">
+        {legs.map((leg, i) => {
+          const legSources = (leg.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
+          return (
+            <li key={leg.id} className="px-3 py-2 flex items-start gap-2">
+              <span className="text-[10px] text-[#6272a4] mt-1 w-4 flex-shrink-0 text-right">{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                <span className={`text-sm ${ticket.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{leg.label}</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                  <span className="text-[10px] text-[#6272a4]">{leg.sport}</span>
+                  {legSources.map((src) => {
+                    const tier = getSourceTier(src, leg.sport);
+                    return (
+                      <span key={src.id} className="text-[10px] text-[#6272a4] flex items-center gap-1">
+                        {src.name}
+                        <span className={`px-1 py-px rounded ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
@@ -382,6 +770,7 @@ export default function BetBoard() {
   // board data
   const [games, setGames] = useState([]);
   const [picks, setPicks] = useState([]);
+  const [tickets, setTickets] = useState([]); // parlays & ladders (candidate staging)
 
   // setup state
   const [newSourceName, setNewSourceName] = useState("");
@@ -405,6 +794,10 @@ export default function BetBoard() {
   const [pickLabel, setPickLabel] = useState("");
   const [selectedSourceIds, setSelectedSourceIds] = useState(new Set());
   const [addMultiple, setAddMultiple] = useState(false);
+  // parlay builder (ladders live on a pick — managed in PickCard via updatePickRungs)
+  const [addMode, setAddMode] = useState("single"); // "single" | "parlay"
+  const [ticketName, setTicketName] = useState("");
+  const [draftLegs, setDraftLegs] = useState([]);
   const [savedFlash, setSavedFlash] = useState(null);
   const [expandedPickId, setExpandedPickId] = useState(null);
   const [collapsedSports, setCollapsedSports] = useState(new Set());
@@ -425,7 +818,7 @@ export default function BetBoard() {
     (async () => {
       let loadedSources = [];
       let loadedUnit = "";
-      let loadedBoard = { games: [], picks: [] };
+      let loadedBoard = { games: [], picks: [], tickets: [] };
       try {
         const s = await storage.get("settings");
         if (s && s.value) {
@@ -438,9 +831,23 @@ export default function BetBoard() {
         const b = await storage.get("board");
         if (b && b.value) {
           const parsed = JSON.parse(b.value);
+          const allTickets = parsed.tickets || [];
+          const ladderTickets = allTickets.filter((t) => t.type === "ladder");
+          let pickList = (parsed.picks || []).map(migratePick);
+          if (ladderTickets.length) {
+            // Older ladders were standalone tickets anchored to a pick — fold their
+            // rungs onto the anchor pick (ladders now live on the pick itself).
+            pickList = pickList.map((p) => {
+              const rungs = ladderTickets
+                .filter((t) => t.anchorPickId === p.id)
+                .flatMap((t) => (t.legs || []).map((l) => ({ id: l.id, label: l.label, sources: l.sources || [], star: !!l.star })));
+              return rungs.length ? { ...p, rungs: [...(p.rungs || []), ...rungs] } : p;
+            });
+          }
           loadedBoard = {
             games: (parsed.games || []).map(migrateGame),
-            picks: (parsed.picks || []).map(migratePick),
+            picks: pickList,
+            tickets: allTickets.filter((t) => t.type !== "ladder"),
           };
         }
       } catch (e) {}
@@ -449,6 +856,7 @@ export default function BetBoard() {
         setUnitValue(loadedUnit);
         setGames(loadedBoard.games);
         setPicks(loadedBoard.picks);
+        setTickets(loadedBoard.tickets);
         setLoading(false);
       }
     })();
@@ -469,13 +877,13 @@ export default function BetBoard() {
     }
   }, []);
 
-  const persistBoard = useCallback(async (nextGames, nextPicks) => {
+  const persistBoard = useCallback(async (nextGames, nextPicks, nextTickets = tickets) => {
     try {
-      await storage.set("board", JSON.stringify({ games: nextGames, picks: nextPicks }));
+      await storage.set("board", JSON.stringify({ games: nextGames, picks: nextPicks, tickets: nextTickets }));
     } catch (e) {
       console.error("Failed to save board", e);
     }
-  }, []);
+  }, [tickets]);
 
   // ----- sources -----
   function addSource() {
@@ -740,6 +1148,14 @@ export default function BetBoard() {
     persistBoard(games, next);
   }
 
+  // Ladder rungs live on the pick: each rung is { id, label, sources, star }.
+  // Sizing scales off the pick's own (anchor) recommendation — see PickCard.
+  function updatePickRungs(id, nextRungs) {
+    const next = picks.map((p) => p.id === id ? { ...p, rungs: nextRungs } : p);
+    setPicks(next);
+    persistBoard(games, next);
+  }
+
   function toggleStar(id) {
     const next = picks.map((p) => p.id === id ? { ...p, star: !p.star } : p);
     setPicks(next);
@@ -776,6 +1192,70 @@ export default function BetBoard() {
     persistBoard(games, next);
   }
 
+  // ----- parlays & ladders (tickets) -----
+  function canAddLeg() {
+    return !!(pickLabel.trim() && selectedSport);
+  }
+
+  function addLegToDraft() {
+    if (!canAddLeg()) return;
+    const leg = {
+      id: uid(),
+      label: pickLabel.trim(),
+      sport: selectedSport,
+      gameId: selectedGameId || null,
+      sources: [...selectedSourceIds].map((sid) => ({ sourceId: sid })),
+    };
+    setDraftLegs((prev) => [...prev, leg]);
+    setPickLabel("");
+    setSelectedSourceIds(new Set());
+    showToast("Leg added");
+  }
+
+  function removeDraftLeg(id) {
+    setDraftLegs((prev) => prev.filter((l) => l.id !== id));
+  }
+
+  function saveTicket() {
+    if (draftLegs.length < 2) return;
+    const ticket = {
+      id: uid(),
+      type: "parlay",
+      name: ticketName.trim(),
+      legs: draftLegs,
+      star: false,
+      placed: false,
+      createdAt: new Date().toISOString(),
+    };
+    const nextTickets = [...tickets, ticket];
+    setTickets(nextTickets);
+    persistBoard(games, picks, nextTickets);
+    setDraftLegs([]);
+    setTicketName("");
+    setPickLabel("");
+    setSelectedSourceIds(new Set());
+    showToast("Parlay saved");
+  }
+
+  function deleteTicket(id) {
+    const nextTickets = tickets.filter((t) => t.id !== id);
+    setTickets(nextTickets);
+    persistBoard(games, picks, nextTickets);
+    showToast("Removed", "remove");
+  }
+
+  function toggleTicketStar(id) {
+    const next = tickets.map((t) => t.id === id ? { ...t, star: !t.star } : t);
+    setTickets(next);
+    persistBoard(games, picks, next);
+  }
+
+  function toggleTicketPlaced(id) {
+    const next = tickets.map((t) => t.id === id ? { ...t, placed: !t.placed } : t);
+    setTickets(next);
+    persistBoard(games, picks, next);
+  }
+
   const sourcesMap = Object.fromEntries(sources.map((s) => [s.id, s]));
 
   function sourceLabel(sourceId) {
@@ -805,13 +1285,30 @@ export default function BetBoard() {
       <div className="max-w-md mx-auto px-4 pt-4">
         {activeTab === "board" && (
           <div className="space-y-4">
-            {picks.length === 0 && games.length === 0 ? (
+            {picks.length === 0 && games.length === 0 && tickets.length === 0 ? (
               <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
                 No picks yet.{" "}
                 <button onClick={() => setActiveTab("add")} className="text-[#bd93f9] underline">Add your first pick</button>
               </div>
             ) : (
               <>
+                {/* ── Parlays ── */}
+                {tickets.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">Parlays</span>
+                      <span className="text-[10px] text-[#6272a4]">({tickets.length})</span>
+                    </div>
+                    <div className="space-y-2">
+                      {tickets.map((t) => (
+                        <TicketCard key={t.id} ticket={t} sourcesMap={sourcesMap}
+                          toggleTicketStar={toggleTicketStar} toggleTicketPlaced={toggleTicketPlaced}
+                          deleteTicket={deleteTicket} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* ── NFL section ── */}
                 {((games.filter((g) => g.sport === "NFL").length > 0) || picks.some((p) => p.sport === "NFL")) && (() => {
                   const nflCollapsed = collapsedSports.has("NFL");
@@ -837,7 +1334,7 @@ export default function BetBoard() {
                         .map((game) => {
                           const gamePicks = picks
                             .filter((p) => p.gameId === game.id)
-                            .sort((a, b) => scorePick(b, sourcesMap, "NFL").total - scorePick(a, sourcesMap, "NFL").total);
+                            .sort((a, b) => scorePick(b, sourcesMap, "NFL").edge - scorePick(a, sourcesMap, "NFL").edge);
                           const gameCollapsed = collapsedGames.has(game.id);
                           return (
                             <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
@@ -892,7 +1389,7 @@ export default function BetBoard() {
                                     <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
                                       sources={sources} sourcesMap={sourcesMap}
                                       expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} />
+                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
                                   ))}
                                 </div>
                               ))}
@@ -905,12 +1402,12 @@ export default function BetBoard() {
                           <div className="px-3 py-2 border-b border-[#44475a] text-xs text-[#6272a4]">No game assigned</div>
                           <div className="divide-y divide-[#44475a]">
                             {picks.filter((p) => p.sport === "NFL" && !p.gameId)
-                              .sort((a, b) => scorePick(b, sourcesMap, "NFL").total - scorePick(a, sourcesMap, "NFL").total)
+                              .sort((a, b) => scorePick(b, sourcesMap, "NFL").edge - scorePick(a, sourcesMap, "NFL").edge)
                               .map((pick) => (
                                 <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} />
+                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
                               ))}
                           </div>
                         </div>
@@ -926,7 +1423,7 @@ export default function BetBoard() {
                   const sportGames = games.filter((g) => g.sport === sport);
                   const sportPicks = picks
                     .filter((p) => p.sport === sport && !p.gameId)
-                    .sort((a, b) => scorePick(b, sourcesMap, sport).total - scorePick(a, sourcesMap, sport).total);
+                    .sort((a, b) => scorePick(b, sourcesMap, sport).edge - scorePick(a, sourcesMap, sport).edge);
                   const hasSportContent = sportGames.length > 0 || sportPicks.length > 0;
                   if (!hasSportContent) return null;
                   const sportCollapsed = collapsedSports.has(sport);
@@ -949,7 +1446,7 @@ export default function BetBoard() {
                         {sportGames.map((game) => {
                           const gamePicks = picks
                             .filter((p) => p.gameId === game.id)
-                            .sort((a, b) => scorePick(b, sourcesMap, sport).total - scorePick(a, sourcesMap, sport).total);
+                            .sort((a, b) => scorePick(b, sourcesMap, sport).edge - scorePick(a, sourcesMap, sport).edge);
                           const gameCollapsed = collapsedGames.has(game.id);
                           return (
                             <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
@@ -1006,7 +1503,7 @@ export default function BetBoard() {
                                       sources={sources} sourcesMap={sourcesMap}
                                       expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
                                       toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
-                                      movePickToGame={movePickToGame} />
+                                      movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
                                   ))}
                                 </div>
                               ))}
@@ -1023,7 +1520,7 @@ export default function BetBoard() {
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
                                   toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
-                                  movePickToGame={movePickToGame} />
+                                  movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
                               ))}
                             </div>
                           </div>
@@ -1040,6 +1537,29 @@ export default function BetBoard() {
 
         {activeTab === "add" && (
           <div className="space-y-4">
+
+            {/* Mode: single pick vs parlay */}
+            <div className="flex rounded-lg overflow-hidden border border-[#44475a]">
+              {[["single", "Single pick"], ["parlay", "Parlay"]].map(([m, label]) => (
+                <button key={m} onClick={() => setAddMode(m)}
+                  className={`flex-1 py-2 text-sm transition-colors ${addMode === m ? "bg-[#bd93f9] text-[#282a36] font-semibold" : "bg-[#343746] text-[#6272a4]"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            {/* Parlay name + hint */}
+            {addMode === "parlay" && (
+              <div className="space-y-2">
+                <input type="text" value={ticketName} onChange={(e) => setTicketName(e.target.value)}
+                  autoCorrect="off" spellCheck={false} autoComplete="off"
+                  placeholder="Parlay name (optional)"
+                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]" />
+                <p className="text-xs text-[#6272a4]">
+                  Add each leg below, then save. Parlays are tracked only — no sizing. For a ladder, open a pick on the board and tap <span className="text-[#8be9fd]">+ Ladder</span>.
+                </p>
+              </div>
+            )}
 
             {/* Sport */}
             <div>
@@ -1121,25 +1641,31 @@ export default function BetBoard() {
                   </div>
                 )}
 
-                {/* Add Multiple toggle — NFL only */}
-                <label className="mt-3 flex items-center gap-2.5 cursor-pointer">
-                  <div onClick={() => setAddMultiple(!addMultiple)}
-                    className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 ${addMultiple ? "bg-[#bd93f9]" : "bg-[#44475a]"}`}>
-                    <div className={`w-4 h-4 bg-white rounded-full mt-0.5 transition-transform ${addMultiple ? "translate-x-4 ml-0.5" : "translate-x-0.5"}`} />
-                  </div>
-                  <span className="text-sm text-[#6272a4]">Add multiple picks for same game</span>
-                </label>
+                {/* Add Multiple toggle — single mode only */}
+                {addMode === "single" && (
+                  <label className="mt-3 flex items-center gap-2.5 cursor-pointer">
+                    <div onClick={() => setAddMultiple(!addMultiple)}
+                      className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 ${addMultiple ? "bg-[#bd93f9]" : "bg-[#44475a]"}`}>
+                      <div className={`w-4 h-4 bg-white rounded-full mt-0.5 transition-transform ${addMultiple ? "translate-x-4 ml-0.5" : "translate-x-0.5"}`} />
+                    </div>
+                    <span className="text-sm text-[#6272a4]">Add multiple picks for same game</span>
+                  </label>
+                )}
               </div>
             )}
 
             {/* Pick text */}
             {selectedSport && (
               <div>
-                <label className="text-xs uppercase tracking-wide text-[#6272a4]">Pick</label>
+                <label className="text-xs uppercase tracking-wide text-[#6272a4]">{addMode === "parlay" ? "Leg" : "Pick"}</label>
                 <input type="text" value={pickLabel} onChange={(e) => setPickLabel(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && canSubmitPick() && addPick()}
-                  autoCorrect="off" spellCheck={false} autoComplete="off" enterKeyHint="done"
-                  placeholder="e.g. Broncos -3.5, Over 47.5, Nix 300+ yds"
+                  onKeyDown={(e) => {
+                    if (e.key !== "Enter") return;
+                    if (addMode === "parlay") { if (canAddLeg()) addLegToDraft(); }
+                    else if (canSubmitPick()) addPick();
+                  }}
+                  autoCorrect="off" spellCheck={false} autoComplete="off" enterKeyHint={addMode === "parlay" ? "next" : "done"}
+                  placeholder={addMode === "parlay" ? "e.g. Broncos -3.5 (one leg)" : "e.g. Broncos -3.5, Over 47.5, Nix 300+ yds"}
                   className="mt-1 w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]" />
               </div>
             )}
@@ -1193,8 +1719,8 @@ export default function BetBoard() {
                         {sources
                           .filter((s) => s.name.toLowerCase().includes(sourceSearch.toLowerCase()))
                           .sort((a, b) => {
-                            const ta = TIER_WEIGHTS[getSourceTier(a, selectedSport)] || 0;
-                            const tb = TIER_WEIGHTS[getSourceTier(b, selectedSport)] || 0;
+                            const ta = TIER_EDGE[getSourceTier(a, selectedSport)] || 0;
+                            const tb = TIER_EDGE[getSourceTier(b, selectedSport)] || 0;
                             return tb - ta;
                           })
                           .map((s) => {
@@ -1240,16 +1766,53 @@ export default function BetBoard() {
               </div>
             )}
 
-            {/* Submit */}
-            {selectedSport && (
-              <>
-                <button onClick={addPick} disabled={!canSubmitPick()}
+            {/* Submit — single pick */}
+            {selectedSport && addMode === "single" && (
+              <button onClick={addPick} disabled={!canSubmitPick()}
+                className={`w-full py-3.5 rounded-lg font-semibold transition-transform ${
+                  canSubmitPick() ? "bg-[#bd93f9] text-[#282a36] active:scale-[0.98]" : "bg-[#21222c] text-[#44475a] cursor-not-allowed"
+                }`}>
+                Add pick
+              </button>
+            )}
+
+            {/* Submit — parlay / ladder builder */}
+            {addMode === "parlay" && (
+              <div className="space-y-3">
+                {draftLegs.length > 0 && (
+                  <div className="bg-[#343746] border border-[#44475a] rounded-lg divide-y divide-[#44475a]">
+                    {draftLegs.map((leg, i) => (
+                      <div key={leg.id} className="flex items-center gap-2 px-3 py-2">
+                        <span className="text-[10px] text-[#6272a4] w-4 text-right flex-shrink-0">{i + 1}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm text-[#f8f8f2] truncate">{leg.label}</div>
+                          <div className="text-[10px] text-[#6272a4]">
+                            {leg.sport}{leg.sources.length ? ` · ${leg.sources.length} source${leg.sources.length === 1 ? "" : "s"}` : ""}
+                          </div>
+                        </div>
+                        <button onClick={() => removeDraftLeg(leg.id)} aria-label="Remove leg"
+                          className="text-[#6272a4] active:text-[#ff5555] text-base leading-none px-2.5 py-2 -my-1 -mr-1 flex-shrink-0">×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {selectedSport && (
+                  <button onClick={addLegToDraft} disabled={!canAddLeg()}
+                    className={`w-full py-3 rounded-lg font-semibold border transition-transform ${
+                      canAddLeg() ? "border-[#bd93f9]/60 text-[#bd93f9] bg-[#bd93f9]/10 active:scale-[0.98]" : "border-[#44475a] text-[#44475a] cursor-not-allowed"
+                    }`}>
+                    + Add leg
+                  </button>
+                )}
+
+                <button onClick={saveTicket} disabled={draftLegs.length < 2}
                   className={`w-full py-3.5 rounded-lg font-semibold transition-transform ${
-                    canSubmitPick() ? "bg-[#bd93f9] text-[#282a36] active:scale-[0.98]" : "bg-[#21222c] text-[#44475a] cursor-not-allowed"
+                    draftLegs.length >= 2 ? "bg-[#bd93f9] text-[#282a36] active:scale-[0.98]" : "bg-[#21222c] text-[#44475a] cursor-not-allowed"
                   }`}>
-                  Add pick
+                  Save parlay{draftLegs.length ? ` (${draftLegs.length} leg${draftLegs.length === 1 ? "" : "s"})` : ""}
                 </button>
-              </>
+              </div>
             )}
           </div>
         )}
