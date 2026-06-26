@@ -18,7 +18,10 @@
       "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/golf/pga/scoreboard?dates=20260625\")",
       "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/soccer/usa.1/scoreboard?dates=20260628\")",
       "Bash(curl -s \"http://site.api.espn.com/apis/site/v2/sports/baseball/mlb/scoreboard?dates=20260626\")",
-      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/betting-board/)"
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/betting-board/)",
+      "WebSearch",
+      "PowerShell(npm run build 2>&1)",
+      "PowerShell(npm run dev)"
     ]
   }
 }
