@@ -14,6 +14,8 @@ import {
   Check,
   CheckCircle2,
   XCircle,
+  Pencil,
+  HelpCircle,
 } from "lucide-react";
 import AddPickAutofill from "./AddPick";
 
@@ -197,7 +199,7 @@ function lineWithinTolerance(line1, line2, market) {
   return Math.abs(Number(line1) - Number(line2)) <= tol;
 }
 
-function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources, movePickToGame, updatePickRungs }) {
+function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources, movePickToGame, updatePickRungs, updatePickLabel }) {
   const expanded = expandedPickId === pick.id;
   const score = scorePick(pick, sourcesMap, sport);
   const decision = scoreToDecision(score.edge);
@@ -220,6 +222,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
   const [rungModal, setRungModal] = useState(null);
   const [rungDropOpen, setRungDropOpen] = useState(false);
   const [rungDropRect, setRungDropRect] = useState(null);
+  const [editingLabel, setEditingLabel] = useState(null);
   const rungSrcRef = useRef(null);
 
   function openRungDrop() {
@@ -304,24 +307,51 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
 
   return (
     <div className="px-3 py-2.5">
-      {/* Row 1: tap target for expand */}
-      <button onClick={() => setExpandedPickId(expanded ? null : pick.id)}
-        className="w-full flex items-center justify-between gap-2 text-left">
-        <div className="flex items-center gap-1.5 min-w-0">
-          {pickSources.length > 1 && (
-            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
-              {pickSources.length}×
-            </span>
-          )}
-          <span className={`text-sm truncate ${pick.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{pickDisplayLabel(pick, null)}</span>
-        </div>
-        <div className="flex items-center gap-1.5 flex-shrink-0">
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${decision.bgCls} ${decision.textCls}`}>
+      {/* Row 1: tap target for expand / rename */}
+      {editingLabel !== null ? (
+        <div className="w-full flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 min-w-0 flex-1">
+            {pickSources.length > 1 && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
+                {pickSources.length}×
+              </span>
+            )}
+            <input
+              autoFocus
+              value={editingLabel}
+              onChange={(e) => setEditingLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { if (editingLabel.trim()) updatePickLabel(pick.id, editingLabel.trim()); setEditingLabel(null); }
+                if (e.key === "Escape") setEditingLabel(null);
+              }}
+              onBlur={() => { if (editingLabel.trim()) updatePickLabel(pick.id, editingLabel.trim()); setEditingLabel(null); }}
+              autoCorrect="off" spellCheck={false} autoComplete="off"
+              className="flex-1 bg-[#282a36] border border-[#bd93f9] rounded px-2 py-0.5 text-sm text-[#f8f8f2] outline-none min-w-0"
+            />
+          </div>
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${decision.bgCls} ${decision.textCls}`}>
             {score.edge.toFixed(1)} · {decision.label}
           </span>
-          {expanded ? <ChevronUp size={16} className="text-[#6272a4]" /> : <ChevronDown size={16} className="text-[#6272a4]" />}
         </div>
-      </button>
+      ) : (
+        <button onClick={() => setExpandedPickId(expanded ? null : pick.id)}
+          className="w-full flex items-center justify-between gap-2 text-left">
+          <div className="flex items-center gap-1.5 min-w-0">
+            {pickSources.length > 1 && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
+                {pickSources.length}×
+              </span>
+            )}
+            <span className={`text-sm truncate ${pick.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{pickDisplayLabel(pick, null)}</span>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${decision.bgCls} ${decision.textCls}`}>
+              {score.edge.toFixed(1)} · {decision.label}
+            </span>
+            {expanded ? <ChevronUp size={16} className="text-[#6272a4]" /> : <ChevronDown size={16} className="text-[#6272a4]" />}
+          </div>
+        </button>
+      )}
 
       {/* Row 2: controls — padded to ~44px tap targets */}
       <div className="flex items-center mt-0.5 -mb-1">
@@ -333,6 +363,10 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
           aria-pressed={!!pick.placed}
           className={`flex-shrink-0 p-2 rounded-lg active:bg-[#282a36] ${pick.placed ? "text-[#50fa7b]" : "text-[#6272a4]"}`}>
           <Check size={17} strokeWidth={pick.placed ? 3 : 2} />
+        </button>
+        <button onClick={() => setEditingLabel(pickDisplayLabel(pick, null))} aria-label="Rename pick"
+          className="flex-shrink-0 p-2 rounded-lg active:bg-[#282a36] text-[#6272a4]">
+          <Pencil size={15} />
         </button>
         <button onClick={() => deletePick(pick.id)} aria-label="Delete pick"
           className="ml-auto p-2 -mr-2 rounded-lg text-[#6272a4] active:bg-[#282a36] active:text-[#ff5555] flex-shrink-0">
@@ -793,7 +827,6 @@ export default function BetBoard() {
   const [editingGameTime, setEditingGameTime] = useState("");
   const [pickLabel, setPickLabel] = useState("");
   const [selectedSourceIds, setSelectedSourceIds] = useState(new Set());
-  const [addMultiple, setAddMultiple] = useState(false);
   // parlay builder (ladders live on a pick — managed in PickCard via updatePickRungs)
   const [addMode, setAddMode] = useState("single"); // "single" | "parlay"
   const [ticketName, setTicketName] = useState("");
@@ -807,6 +840,7 @@ export default function BetBoard() {
   const [toast, setToast] = useState(null); // { message, type: "success"|"remove" }
   const [userEmail, setUserEmail] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null); // { message, confirmLabel, onConfirm }
+  const [showHelp, setShowHelp] = useState(false);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
@@ -1074,11 +1108,6 @@ export default function BetBoard() {
   function resetPickForm() {
     setPickLabel("");
     setSelectedSourceIds(new Set());
-    // sport stays if addMultiple, game stays if addMultiple
-    if (!addMultiple) {
-      setSelectedGameId(null);
-      setSelectedSport(null);
-    }
   }
 
   function canSubmitPick() {
@@ -1138,6 +1167,12 @@ export default function BetBoard() {
 
   function movePickToGame(id, gameId) {
     const next = picks.map((p) => p.id === id ? { ...p, gameId: gameId || null } : p);
+    setPicks(next);
+    persistBoard(games, next);
+  }
+
+  function updatePickLabel(id, label) {
+    const next = picks.map((p) => p.id === id ? { ...p, label } : p);
     setPicks(next);
     persistBoard(games, next);
   }
@@ -1389,7 +1424,7 @@ export default function BetBoard() {
                                     <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
                                       sources={sources} sourcesMap={sourcesMap}
                                       expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
+                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
                                   ))}
                                 </div>
                               ))}
@@ -1407,7 +1442,7 @@ export default function BetBoard() {
                                 <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
+                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
                               ))}
                           </div>
                         </div>
@@ -1503,7 +1538,7 @@ export default function BetBoard() {
                                       sources={sources} sourcesMap={sourcesMap}
                                       expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
                                       toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
-                                      movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
+                                      movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
                                   ))}
                                 </div>
                               ))}
@@ -1520,7 +1555,7 @@ export default function BetBoard() {
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
                                   toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
-                                  movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} />
+                                  movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
                               ))}
                             </div>
                           </div>
@@ -1641,16 +1676,6 @@ export default function BetBoard() {
                   </div>
                 )}
 
-                {/* Add Multiple toggle — single mode only */}
-                {addMode === "single" && (
-                  <label className="mt-3 flex items-center gap-2.5 cursor-pointer">
-                    <div onClick={() => setAddMultiple(!addMultiple)}
-                      className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 ${addMultiple ? "bg-[#bd93f9]" : "bg-[#44475a]"}`}>
-                      <div className={`w-4 h-4 bg-white rounded-full mt-0.5 transition-transform ${addMultiple ? "translate-x-4 ml-0.5" : "translate-x-0.5"}`} />
-                    </div>
-                    <span className="text-sm text-[#6272a4]">Add multiple picks for same game</span>
-                  </label>
-                )}
               </div>
             )}
 
@@ -2037,6 +2062,82 @@ export default function BetBoard() {
             ? <XCircle size={15} />
             : <CheckCircle2 size={15} />}
           {toast.message}
+        </div>
+      )}
+
+      {/* Help FAB */}
+      <button
+        onClick={() => setShowHelp(true)}
+        className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-4 z-40 w-12 h-12 rounded-full bg-[#343746] border border-[#6272a4] flex items-center justify-center text-[#6272a4] shadow-lg active:scale-95 transition-transform"
+        aria-label="How scoring works"
+      >
+        <HelpCircle size={22} />
+      </button>
+
+      {/* Scoring help modal */}
+      {showHelp && (
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 p-3"
+          onClick={() => setShowHelp(false)}>
+          <div className="w-full max-w-md bg-[#343746] border border-[#44475a] rounded-xl p-4 space-y-4 max-h-[80dvh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold text-[#f8f8f2]">How scoring works</span>
+              <button onClick={() => setShowHelp(false)} className="text-[#6272a4] px-2 py-1 text-xl leading-none">✕</button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Source tiers — base edge</div>
+              <div className="space-y-1.5">
+                {[["A — Sharp", 10, "#bd93f9"], ["B — Solid", 4.5, "#8be9fd"], ["C — Long shot", 1.5, "#6272a4"]].map(([label, edge, color]) => (
+                  <div key={label} className="flex items-center gap-3">
+                    <span className="text-xs text-[#f8f8f2] w-32 flex-shrink-0">{label}</span>
+                    <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
+                      <div className="h-full rounded-full" style={{ width: `${(edge / 10) * 100}%`, backgroundColor: color, opacity: 0.6 }} />
+                    </div>
+                    <span className="text-xs text-[#6272a4] w-8 text-right flex-shrink-0">+{edge}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Consensus (diminishing returns)</div>
+              <p className="text-xs text-[#6272a4] leading-relaxed">Each additional agreeing source counts <span className="text-[#f8f8f2]">60%</span> of the previous. Two A-sources = 10 + 6 = 16 edge. Three = 10 + 6 + 3.6 = 19.6.</p>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Personal star</div>
+              <p className="text-xs text-[#6272a4]">Adds <span className="text-[#f8f8f2]">+4</span> to edge — your own conviction layered on top of the sources.</p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Sizing thresholds</div>
+              <div className="rounded-lg overflow-hidden border border-[#44475a]">
+                {[
+                  ["≥ 18 edge", "2u", DECISION.high.textCls],
+                  ["≥ 14 edge", "1.5u", DECISION.mid.textCls],
+                  ["≥ 10 edge", "1u", DECISION.standard.textCls],
+                  ["≥ 7.5 edge", "0.5u", DECISION.small.textCls],
+                  ["< 7.5 edge", "Pass", DECISION.pass.textCls],
+                ].map(([threshold, label, cls]) => (
+                  <div key={threshold} className="flex items-center justify-between px-3 py-2 border-b border-[#44475a] last:border-0 bg-[#282a36]">
+                    <span className="text-xs text-[#6272a4]">{threshold}</span>
+                    <span className={`text-xs font-bold ${cls}`}>{label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Ladder rungs</div>
+              <p className="text-xs text-[#6272a4] leading-relaxed">Rungs scale off the anchor pick's size. Each rung is capped at <span className="text-[#f8f8f2]">55%</span> of the one above. A 1u anchor → first rung max 0.55u → second rung max 0.30u.</p>
+            </div>
+
+            <button onClick={() => setShowHelp(false)}
+              className="w-full py-2.5 rounded-lg text-sm font-semibold bg-[#21222c] text-[#6272a4] border border-[#44475a] active:scale-[0.98] transition-transform">
+              Got it
+            </button>
+          </div>
         </div>
       )}
 
