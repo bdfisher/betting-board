@@ -16,6 +16,7 @@ import {
   XCircle,
   Pencil,
   HelpCircle,
+  Tag,
 } from "lucide-react";
 import AddPickAutofill from "./AddPick";
 
@@ -842,6 +843,20 @@ export default function BetBoard() {
   const [confirmDialog, setConfirmDialog] = useState(null); // { message, confirmLabel, onConfirm }
   const [showHelp, setShowHelp] = useState(false);
 
+  // promos & their config lists (books + types managed in Setup)
+  const [books, setBooks] = useState([]);
+  const [promoTypes, setPromoTypes] = useState([]);
+  const [newBookName, setNewBookName] = useState("");
+  const [newPromoTypeName, setNewPromoTypeName] = useState("");
+  const [promos, setPromos] = useState([]);
+  const [promoView, setPromoView] = useState("all"); // "all" | "byBook" | "byType"
+  const [showAddPromo, setShowAddPromo] = useState(false);
+  const [newPromoName, setNewPromoName] = useState("");
+  const [newPromoBookId, setNewPromoBookId] = useState("");
+  const [newPromoTypeId, setNewPromoTypeId] = useState("");
+  const [editingPromoCell, setEditingPromoCell] = useState(null); // { promoId, field }
+  const [editingPromoCellValue, setEditingPromoCellValue] = useState("");
+
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null));
@@ -852,13 +867,17 @@ export default function BetBoard() {
     (async () => {
       let loadedSources = [];
       let loadedUnit = "";
-      let loadedBoard = { games: [], picks: [], tickets: [] };
+      let loadedBooks = [];
+      let loadedPromoTypes = [];
+      let loadedBoard = { games: [], picks: [], tickets: [], promos: [] };
       try {
         const s = await storage.get("settings");
         if (s && s.value) {
           const parsed = JSON.parse(s.value);
           loadedSources = (parsed.sources || []).map(migrateSource);
           loadedUnit = parsed.unitValue || "";
+          loadedBooks = parsed.books || [];
+          loadedPromoTypes = parsed.promoTypes || [];
         }
       } catch (e) {}
       try {
@@ -882,15 +901,19 @@ export default function BetBoard() {
             games: (parsed.games || []).map(migrateGame),
             picks: pickList,
             tickets: allTickets.filter((t) => t.type !== "ladder"),
+            promos: parsed.promos || [],
           };
         }
       } catch (e) {}
       if (mounted) {
         setSources(loadedSources);
         setUnitValue(loadedUnit);
+        setBooks(loadedBooks);
+        setPromoTypes(loadedPromoTypes);
         setGames(loadedBoard.games);
         setPicks(loadedBoard.picks);
         setTickets(loadedBoard.tickets);
+        setPromos(loadedBoard.promos);
         setLoading(false);
       }
     })();
@@ -903,21 +926,21 @@ export default function BetBoard() {
     updateExportJson(sources);
   }, [sources]);
 
-  const persistSettings = useCallback(async (nextSources, nextUnit) => {
+  const persistSettings = useCallback(async (nextSources, nextUnit, nextBooks = books, nextPromoTypes = promoTypes) => {
     try {
-      await storage.set("settings", JSON.stringify({ sources: nextSources, unitValue: nextUnit }));
+      await storage.set("settings", JSON.stringify({ sources: nextSources, unitValue: nextUnit, books: nextBooks, promoTypes: nextPromoTypes }));
     } catch (e) {
       console.error("Failed to save settings", e);
     }
-  }, []);
+  }, [books, promoTypes]);
 
-  const persistBoard = useCallback(async (nextGames, nextPicks, nextTickets = tickets) => {
+  const persistBoard = useCallback(async (nextGames, nextPicks, nextTickets = tickets, nextPromos = promos) => {
     try {
-      await storage.set("board", JSON.stringify({ games: nextGames, picks: nextPicks, tickets: nextTickets }));
+      await storage.set("board", JSON.stringify({ games: nextGames, picks: nextPicks, tickets: nextTickets, promos: nextPromos }));
     } catch (e) {
       console.error("Failed to save board", e);
     }
-  }, [tickets]);
+  }, [tickets, promos]);
 
   // ----- sources -----
   function addSource() {
@@ -1021,6 +1044,75 @@ export default function BetBoard() {
     const next = sources.filter((s) => s.id !== id);
     setSources(next); persistSettings(next, unitValue);
     if (expandedSourceId === id) setExpandedSourceId(null);
+  }
+
+  // ----- sportsbooks -----
+  function addBook() {
+    const name = newBookName.trim();
+    if (!name) return;
+    const next = [...books, { id: uid(), name }];
+    setBooks(next); persistSettings(sources, unitValue, next, promoTypes);
+    setNewBookName("");
+  }
+
+  function deleteBook(id) {
+    const next = books.filter((b) => b.id !== id);
+    setBooks(next); persistSettings(sources, unitValue, next, promoTypes);
+  }
+
+  // ----- promo types -----
+  function addPromoType() {
+    const name = newPromoTypeName.trim();
+    if (!name) return;
+    const next = [...promoTypes, { id: uid(), name }];
+    setPromoTypes(next); persistSettings(sources, unitValue, books, next);
+    setNewPromoTypeName("");
+  }
+
+  function deletePromoType(id) {
+    const next = promoTypes.filter((t) => t.id !== id);
+    setPromoTypes(next); persistSettings(sources, unitValue, books, next);
+  }
+
+  // ----- promos -----
+  function addPromo() {
+    const name = newPromoName.trim();
+    if (!name || !newPromoBookId) return;
+    const promo = {
+      id: uid(),
+      name,
+      bookId: newPromoBookId,
+      typeId: newPromoTypeId || null,
+      used: false,
+      createdAt: new Date().toISOString(),
+    };
+    const next = [...promos, promo];
+    setPromos(next); persistBoard(games, picks, tickets, next);
+    setNewPromoName(""); setNewPromoBookId(""); setNewPromoTypeId(""); setShowAddPromo(false);
+    showToast("Promo added");
+  }
+
+  function deletePromo(id) {
+    const next = promos.filter((p) => p.id !== id);
+    setPromos(next); persistBoard(games, picks, tickets, next);
+    showToast("Promo removed", "remove");
+  }
+
+  function clearAllPromos() {
+    requestConfirm(`Delete all ${promos.length} promo${promos.length === 1 ? "" : "s"}? This can't be undone.`, () => {
+      setPromos([]); persistBoard(games, picks, tickets, []);
+      showToast("Promos cleared", "remove");
+    });
+  }
+
+  function togglePromoUsed(id) {
+    const next = promos.map((p) => p.id === id ? { ...p, used: !p.used } : p);
+    setPromos(next); persistBoard(games, picks, tickets, next);
+  }
+
+  function updatePromoField(id, field, value) {
+    const next = promos.map((p) => p.id === id ? { ...p, [field]: value } : p);
+    setPromos(next); persistBoard(games, picks, tickets, next);
   }
 
   // ----- games (flat list for any sport) -----
@@ -1300,6 +1392,112 @@ export default function BetBoard() {
   function sourceTier(sourceId) {
     const s = sources.find((s) => s.id === sourceId);
     return s ? s.tier : null;
+  }
+
+  // ----- promo row helpers (defined here to close over state) -----
+  // Uses <tr>/<td> so all rows share a single table-layout context and columns align.
+  // Each cell wraps its content in a fixed h-7 flex container so the row height never
+  // changes between view mode (span/button) and edit mode (input/select).
+  function renderPromoRow(p) {
+    const book = books.find((b) => b.id === p.bookId);
+    const type = promoTypes.find((t) => t.id === p.typeId);
+    const isEditingName = editingPromoCell?.promoId === p.id && editingPromoCell.field === "name";
+    const isEditingBook = editingPromoCell?.promoId === p.id && editingPromoCell.field === "bookId";
+    const isEditingType = editingPromoCell?.promoId === p.id && editingPromoCell.field === "typeId";
+    return (
+      <tr key={p.id} className={`border-b border-[#44475a] last:border-0 ${p.used ? "opacity-50" : ""}`}>
+        <td className="pl-2 pr-1 py-1.5 w-8">
+          <div className="h-7 flex items-center justify-center">
+            <button onClick={() => togglePromoUsed(p.id)}
+              className={`w-5 h-5 rounded border flex items-center justify-center ${p.used ? "bg-[#50fa7b]/20 border-[#50fa7b]/50" : "border-[#44475a]"}`}>
+              {p.used && <Check size={12} className="text-[#50fa7b]" />}
+            </button>
+          </div>
+        </td>
+        <td className="px-2 py-1.5">
+          <div className="h-7 flex items-center">
+            {isEditingName ? (
+              <input autoFocus value={editingPromoCellValue}
+                onChange={(e) => setEditingPromoCellValue(e.target.value)}
+                onBlur={() => { updatePromoField(p.id, "name", editingPromoCellValue.trim() || p.name); setEditingPromoCell(null); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") { updatePromoField(p.id, "name", editingPromoCellValue.trim() || p.name); setEditingPromoCell(null); }
+                  if (e.key === "Escape") setEditingPromoCell(null);
+                }}
+                className="w-full h-7 bg-[#21222c] border border-[#bd93f9] rounded px-1.5 text-sm text-[#f8f8f2]" />
+            ) : (
+              <span onClick={() => { setEditingPromoCell({ promoId: p.id, field: "name" }); setEditingPromoCellValue(p.name); }}
+                className={`block cursor-text text-sm truncate w-full ${p.used ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>
+                {p.name}
+              </span>
+            )}
+          </div>
+        </td>
+        <td className="px-2 py-1.5 w-28">
+          <div className="h-7 flex items-center">
+            {isEditingBook ? (
+              <select autoFocus value={editingPromoCellValue}
+                onChange={(e) => { updatePromoField(p.id, "bookId", e.target.value); setEditingPromoCell(null); }}
+                onBlur={() => setEditingPromoCell(null)}
+                className="w-full h-7 bg-[#21222c] border border-[#bd93f9] rounded text-xs px-1 text-[#f8f8f2]">
+                {books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+            ) : (
+              <button onClick={() => { setEditingPromoCell({ promoId: p.id, field: "bookId" }); setEditingPromoCellValue(p.bookId); }}
+                className="w-full h-7 text-left text-xs bg-[#bd93f9]/20 text-[#bd93f9] border border-[#bd93f9]/30 rounded px-1.5 truncate">
+                {book?.name || "?"}
+              </button>
+            )}
+          </div>
+        </td>
+        <td className="px-2 py-1.5 w-24">
+          <div className="h-7 flex items-center">
+            {isEditingType ? (
+              <select autoFocus value={editingPromoCellValue}
+                onChange={(e) => { updatePromoField(p.id, "typeId", e.target.value || null); setEditingPromoCell(null); }}
+                onBlur={() => setEditingPromoCell(null)}
+                className="w-full h-7 bg-[#21222c] border border-[#bd93f9] rounded text-xs px-1 text-[#f8f8f2]">
+                <option value="">None</option>
+                {promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            ) : (
+              <button onClick={() => { setEditingPromoCell({ promoId: p.id, field: "typeId" }); setEditingPromoCellValue(p.typeId || ""); }}
+                className={`w-full h-7 text-left text-xs rounded px-1.5 truncate ${p.typeId ? "bg-[#8be9fd]/10 text-[#8be9fd] border border-[#8be9fd]/30" : "text-[#44475a]"}`}>
+                {type?.name || "—"}
+              </button>
+            )}
+          </div>
+        </td>
+        <td className="pl-1 pr-2 py-1.5 w-8">
+          <div className="h-7 flex items-center justify-center">
+            <button onClick={() => deletePromo(p.id)}
+              className="text-[#6272a4] active:text-[#ff5555] p-1 rounded">
+              <Trash2 size={15} />
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  function renderPromosByGroup(promoList, groupKey, list) {
+    const groups = [];
+    list.forEach((item) => {
+      const items = promoList.filter((p) => p[groupKey] === item.id);
+      if (items.length > 0) groups.push({ id: item.id, name: item.name, items });
+    });
+    const untagged = promoList.filter((p) => !p[groupKey]);
+    if (untagged.length > 0) groups.push({ id: null, name: "Untagged", items: untagged });
+    return groups.map((g) => (
+      <React.Fragment key={g.id || "__untagged__"}>
+        <tr className="bg-[#282a36]">
+          <td colSpan={5} className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-[#6272a4] border-b border-[#44475a]">
+            {g.name} <span className="text-[#44475a]">({g.items.length})</span>
+          </td>
+        </tr>
+        {g.items.map(renderPromoRow)}
+      </React.Fragment>
+    ));
   }
 
   if (loading) {
@@ -1977,6 +2175,60 @@ export default function BetBoard() {
               )}
             </div>
 
+            <div>
+              <label className="text-xs uppercase tracking-wide text-[#6272a4]">Sportsbooks</label>
+              <div className="mt-1 flex gap-2">
+                <input type="text" value={newBookName} onChange={(e) => setNewBookName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addBook()}
+                  autoCapitalize="words" autoCorrect="off" spellCheck={false}
+                  placeholder="e.g. DraftKings"
+                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                <button onClick={addBook} className="bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2">
+                  <Plus size={18} />
+                </button>
+              </div>
+              {books.length > 0 && (
+                <div className="mt-2 space-y-1.5">
+                  {books.map((b) => (
+                    <div key={b.id} className="bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 flex items-center">
+                      <span className="flex-1 text-sm text-[#f8f8f2]">{b.name}</span>
+                      <button onClick={() => deleteBook(b.id)} aria-label="Delete book"
+                        className="text-[#6272a4] active:text-[#ff5555] p-1.5 -mr-1 rounded-lg">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div>
+              <label className="text-xs uppercase tracking-wide text-[#6272a4]">Promo types</label>
+              <div className="mt-1 flex gap-2">
+                <input type="text" value={newPromoTypeName} onChange={(e) => setNewPromoTypeName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addPromoType()}
+                  autoCapitalize="words" autoCorrect="off" spellCheck={false}
+                  placeholder="e.g. Profit Boost"
+                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                <button onClick={addPromoType} className="bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2">
+                  <Plus size={18} />
+                </button>
+              </div>
+              {promoTypes.length > 0 && (
+                <div className="mt-2 space-y-1.5">
+                  {promoTypes.map((t) => (
+                    <div key={t.id} className="bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 flex items-center">
+                      <span className="flex-1 text-sm text-[#f8f8f2]">{t.name}</span>
+                      <button onClick={() => deletePromoType(t.id)} aria-label="Delete promo type"
+                        className="text-[#6272a4] active:text-[#ff5555] p-1.5 -mr-1 rounded-lg">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div className="bg-[#343746] border border-[#44475a] rounded-lg overflow-hidden">
               <button
                 type="button"
@@ -2016,6 +2268,92 @@ export default function BetBoard() {
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {activeTab === "promos" && (
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-lg border border-[#44475a] text-xs overflow-hidden">
+                {[["all", "All"], ["byBook", "By Book"], ["byType", "By Type"]].map(([v, l]) => (
+                  <button key={v} onClick={() => setPromoView(v)}
+                    className={`px-2.5 py-1.5 ${promoView === v ? "bg-[#bd93f9] text-[#282a36] font-semibold" : "bg-[#343746] text-[#6272a4]"}`}>
+                    {l}
+                  </button>
+                ))}
+              </div>
+              <div className="ml-auto flex gap-2">
+                <button onClick={() => setShowAddPromo((prev) => !prev)}
+                  className="flex items-center gap-1 text-xs bg-[#bd93f9] text-[#282a36] font-semibold rounded-lg px-2.5 py-1.5 active:scale-95 transition-transform">
+                  <Plus size={14} /> Add
+                </button>
+                {promos.length > 0 && (
+                  <button onClick={clearAllPromos}
+                    className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg border border-[#44475a] active:scale-95 transition-transform">
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {showAddPromo && (
+              <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
+                <input type="text" value={newPromoName} onChange={(e) => setNewPromoName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addPromo()}
+                  placeholder="Promo name (required)"
+                  autoFocus
+                  className="w-full bg-[#21222c] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a] text-[#f8f8f2]" />
+                <select value={newPromoBookId} onChange={(e) => setNewPromoBookId(e.target.value)}
+                  className="w-full bg-[#21222c] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]">
+                  <option value="">Select book… (required)</option>
+                  {books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+                {books.length === 0 && (
+                  <p className="text-xs text-[#ff5555]">Add sportsbooks in Setup first.</p>
+                )}
+                <select value={newPromoTypeId} onChange={(e) => setNewPromoTypeId(e.target.value)}
+                  className="w-full bg-[#21222c] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]">
+                  <option value="">No type (optional)</option>
+                  {promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <div className="flex gap-2">
+                  <button onClick={addPromo} disabled={!newPromoName.trim() || !newPromoBookId}
+                    className="flex-1 py-2 rounded-lg text-sm font-semibold bg-[#bd93f9] text-[#282a36] disabled:bg-[#21222c] disabled:text-[#44475a] active:scale-[0.98] transition-transform">
+                    Save
+                  </button>
+                  <button onClick={() => { setShowAddPromo(false); setNewPromoName(""); setNewPromoBookId(""); setNewPromoTypeId(""); }}
+                    className="px-4 py-2 rounded-lg text-sm text-[#6272a4] bg-[#21222c] border border-[#44475a]">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {promos.length === 0 ? (
+              <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
+                No promos yet.{" "}
+                <button onClick={() => setShowAddPromo(true)} className="text-[#bd93f9] underline">Add your first promo</button>
+              </div>
+            ) : (
+              <div className="bg-[#343746] border border-[#44475a] rounded-lg overflow-hidden">
+                <table className="w-full table-fixed border-collapse">
+                  <thead>
+                    <tr className="bg-[#282a36] border-b border-[#44475a]">
+                      <th className="w-8 py-1.5" />
+                      <th className="text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Name</th>
+                      <th className="w-28 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Book</th>
+                      <th className="w-24 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Type</th>
+                      <th className="w-8 py-1.5" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {promoView === "all" && promos.map(renderPromoRow)}
+                    {promoView === "byBook" && renderPromosByGroup(promos, "bookId", books)}
+                    {promoView === "byType" && renderPromosByGroup(promos, "typeId", promoTypes)}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2146,6 +2484,7 @@ export default function BetBoard() {
           {[
             { key: "board", label: "Board", Icon: ClipboardList },
             { key: "add", label: "Add", Icon: PlusCircle },
+            { key: "promos", label: "Promos", Icon: Tag },
             { key: "setup", label: "Setup", Icon: Settings },
           ].map(({ key, label, Icon }) => (
             <button
