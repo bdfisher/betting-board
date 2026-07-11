@@ -228,7 +228,7 @@ export default function AddPickAutofill({ selectedSport, onImportGames }) {
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="truncate">{g.away && g.home ? `${g.away} @ ${g.home}` : g.id}</div>
-                    {oddsPreview(g) && <div className="text-[11px] text-[#8be9fd] truncate">{oddsPreview(g)}</div>}
+                    {oddsPreview(g) && <div className="text-[11px] text-[#8be9fd] truncate font-mono tabular-nums">{oddsPreview(g)}</div>}
                   </div>
                   <div className="text-xs text-[#6272a4] ml-1 whitespace-nowrap flex-shrink-0">
                     {fetchMode === "week" && g.date ? `${g.date}  ` : ""}{g.gameTime}

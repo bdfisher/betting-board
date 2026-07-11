@@ -111,23 +111,25 @@ const chipStyle = (hex) => ({ color: hex, backgroundColor: `${hex}22`, borderCol
 const SPREAD_SPORTS = new Set(["NFL", "NCAAF"]);
 const fmtSpread = (n) => (n === 0 ? "PK" : n > 0 ? `+${n}` : `${n}`);
 
-// Game header as "Away (odds) @ Home (odds)". Falls back to the stored label for
-// manual games or games without an odds snapshot.
-function gameLabelNode(game) {
+// Plain matchup for the header's top line (truncatable). Falls back to the stored
+// label for manual games without home/away.
+function gameNames(game) {
+  if (game.home && game.away) return `${game.away} @ ${game.home}`;
+  return game.label;
+}
+
+// Compact odds for the header's sub-line: favorite's spread for NFL/NCAAF, both
+// moneylines (away / home) otherwise. Returns "" when there's no odds snapshot.
+function gameOddsSummary(game) {
   const o = game.odds;
-  if (!o || !game.home || !game.away) return game.label;
-  const isSpread = SPREAD_SPORTS.has(game.sport);
-  const awayOdds = isSpread ? (o.favorite === "away" && o.spread != null ? fmtSpread(o.spread) : null) : o.awayML;
-  const homeOdds = isSpread ? (o.favorite === "home" && o.spread != null ? fmtSpread(o.spread) : null) : o.homeML;
-  // Each side is nowrap so "Commanders (+150)" never splits; the line can only break
-  // at the " @ " between them.
-  return (
-    <>
-      <span className="whitespace-nowrap">{game.away}{awayOdds && <span className="text-[#8be9fd] font-normal"> ({awayOdds})</span>}</span>
-      <span className="text-[#6272a4] font-normal"> @ </span>
-      <span className="whitespace-nowrap">{game.home}{homeOdds && <span className="text-[#8be9fd] font-normal"> ({homeOdds})</span>}</span>
-    </>
-  );
+  if (!o) return "";
+  if (SPREAD_SPORTS.has(game.sport)) {
+    if (o.spread == null || !o.favorite) return "";
+    const favName = o.favorite === "home" ? game.home : game.away;
+    return `${favName} ${fmtSpread(o.spread)}`;
+  }
+  if (o.awayML && o.homeML) return `${o.awayML} / ${o.homeML}`;
+  return o.awayML || o.homeML || "";
 }
 
 function findNflTeam(input) {
@@ -339,7 +341,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
         <div className="w-full flex items-center justify-between gap-2">
           <div className="flex items-center gap-1.5 min-w-0 flex-1">
             {pickSources.length > 1 && (
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
+              <span className="text-[10px] font-bold font-mono tabular-nums px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
                 {pickSources.length}×
               </span>
             )}
@@ -356,7 +358,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
               className="flex-1 bg-[#282a36] border border-[#bd93f9] rounded px-2 py-0.5 text-sm text-[#f8f8f2] outline-none min-w-0"
             />
           </div>
-          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex-shrink-0 ${decision.bgCls} ${decision.textCls}`}>
+          <span className={`text-[10px] font-bold font-mono tabular-nums px-2 py-0.5 rounded-full border flex-shrink-0 ${decision.bgCls} ${decision.textCls}`}>
             {score.edge.toFixed(1)} · {decision.label}
           </span>
         </div>
@@ -365,14 +367,14 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
           className="w-full flex items-center justify-between gap-2 text-left">
           <div className="flex items-center gap-1.5 min-w-0">
             {pickSources.length > 1 && (
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
+              <span className="text-[10px] font-bold font-mono tabular-nums px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
                 {pickSources.length}×
               </span>
             )}
             <span className={`text-sm truncate ${pick.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{pickDisplayLabel(pick, null)}</span>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${decision.bgCls} ${decision.textCls}`}>
+            <span className={`text-[10px] font-bold font-mono tabular-nums px-2 py-0.5 rounded-full border ${decision.bgCls} ${decision.textCls}`}>
               {score.edge.toFixed(1)} · {decision.label}
             </span>
             {expanded ? <ChevronUp size={16} className="text-[#6272a4]" /> : <ChevronDown size={16} className="text-[#6272a4]" />}
@@ -425,7 +427,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                     </div>
                   )}
                 </div>
-                <span className={`text-[10px] font-bold flex-shrink-0 ${u ? "text-[#50fa7b]" : "text-[#ff5555]"}`}>
+                <span className={`text-[10px] font-bold font-mono tabular-nums flex-shrink-0 ${u ? "text-[#50fa7b]" : "text-[#ff5555]"}`}>
                   {rEdge != null ? `${rEdge.toFixed(1)} · ` : ""}{fmtUnits(u)}
                 </span>
               </button>
@@ -452,12 +454,12 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                 <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
                   <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 18) * 100)}%` }} />
                 </div>
-                <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0">{val.toFixed(1)}</span>
+                <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0 font-mono tabular-nums">{val.toFixed(1)}</span>
               </div>
             ))}
             <div className="flex items-center justify-between pt-1 border-t border-[#44475a]">
               <span className="text-xs text-[#6272a4]">Effective edge</span>
-              <span className={`text-sm font-bold ${decision.textCls}`}>{score.edge.toFixed(1)}</span>
+              <span className={`text-sm font-bold font-mono tabular-nums ${decision.textCls}`}>{score.edge.toFixed(1)}</span>
             </div>
           </div>
 
@@ -520,7 +522,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                   onFocus={openDrop}
                   autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                   placeholder="Add a source…"
-                  className="flex-1 bg-transparent text-xs text-[#f8f8f2] placeholder-[#44475a] outline-none"
+                  className="flex-1 bg-transparent text-xs text-[#f8f8f2] placeholder-[#6272a4] outline-none"
                 />
               </div>
               {srcDropOpen && (
@@ -601,7 +603,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                 onKeyDown={(e) => { if (e.key === "Enter") saveRung(); }}
                 autoCorrect="off" spellCheck={false} autoComplete="off"
                 placeholder="e.g. 300+ pass yds"
-                className="mt-1 w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]" />
+                className="mt-1 w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#6272a4]" />
             </div>
 
             {/* Star */}
@@ -651,7 +653,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                       onBlur={() => setRungDropOpen(false)}
                       autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                       placeholder={rungModal.sourceIds.size === 0 ? "Search sources…" : ""}
-                      className="flex-1 min-w-[80px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#44475a] outline-none py-0.5"
+                      className="flex-1 min-w-[80px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#6272a4] outline-none py-0.5"
                     />
                   </div>
                   {/* Inline dropdown — sits in normal flow directly under the input so it
@@ -714,7 +716,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                     <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
                       <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 18) * 100)}%` }} />
                     </div>
-                    <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0">{val.toFixed(1)}</span>
+                    <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0 font-mono tabular-nums">{val.toFixed(1)}</span>
                   </div>
                 ))}
                 <div className="flex items-center justify-between pt-1 border-t border-[#44475a]">
@@ -1730,28 +1732,37 @@ export default function BetBoard() {
                           const gameCollapsed = collapsedGames.has(game.id);
                           return (
                             <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
-                              <div className={`flex items-center justify-between px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
+                              <div className={`flex items-start justify-between gap-2 px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
                                 <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
-                                  className="flex items-start gap-1.5 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
-                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
+                                  className="flex items-start gap-2 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+                                  {gameCollapsed ? <ChevronRight size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
                                   <div className="min-w-0 flex-1">
-                                    <span className="text-sm font-semibold text-[#f8f8f2]">{gameLabelNode(game)}</span>
-                                    {game.gameTime && <span className="text-xs text-[#6272a4] ml-1.5 whitespace-nowrap">· {game.gameTime}</span>}
-                                    {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] ml-1.5">({gamePicks.length})</span>}
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="text-sm font-semibold text-[#f8f8f2] truncate min-w-0">{gameNames(game)}</span>
+                                      {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
+                                    </div>
+                                    {(gameOddsSummary(game) || game.gameTime) && (
+                                      <div className="flex items-center gap-2.5 mt-1 text-[11px] font-mono tabular-nums">
+                                        {gameOddsSummary(game) && <span className="text-[#8be9fd] font-medium tracking-tight">{gameOddsSummary(game)}</span>}
+                                        {gameOddsSummary(game) && game.gameTime && <span className="w-px h-3 bg-[#6272a4] flex-shrink-0" />}
+                                        {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
+                                      </div>
+                                    )}
                                   </div>
                                 </button>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-0.5 flex-shrink-0 -mr-1">
                                   <button onClick={() => {
                                       setEditingGameId(game.id);
                                       setEditingGameLabel(game.label);
                                       setEditingGameTime(game.gameTime || "");
                                     }}
-                                    className="text-[#6272a4] px-2 py-1 rounded-lg border border-[#44475a] active:bg-[#282a36] text-xs">
-                                    Edit
+                                    aria-label="Edit game"
+                                    className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
+                                    <Pencil size={15} />
                                   </button>
                                   <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
-                                    className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
-                                    <Trash2 size={16} />
+                                    className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg active:bg-[#282a36]">
+                                    <Trash2 size={15} />
                                   </button>
                                 </div>
                               </div>
@@ -1844,28 +1855,37 @@ export default function BetBoard() {
                           const gameCollapsed = collapsedGames.has(game.id);
                           return (
                             <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
-                              <div className={`flex items-center justify-between px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
+                              <div className={`flex items-start justify-between gap-2 px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
                                 <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
-                                  className="flex items-start gap-1.5 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
-                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
+                                  className="flex items-start gap-2 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+                                  {gameCollapsed ? <ChevronRight size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
                                   <div className="min-w-0 flex-1">
-                                    <span className="text-sm font-semibold text-[#f8f8f2]">{gameLabelNode(game)}</span>
-                                    {game.gameTime && <span className="text-xs text-[#6272a4] ml-1.5 whitespace-nowrap">· {game.gameTime}</span>}
-                                    {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] ml-1.5">({gamePicks.length})</span>}
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="text-sm font-semibold text-[#f8f8f2] truncate min-w-0">{gameNames(game)}</span>
+                                      {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
+                                    </div>
+                                    {(gameOddsSummary(game) || game.gameTime) && (
+                                      <div className="flex items-center gap-2.5 mt-1 text-[11px] font-mono tabular-nums">
+                                        {gameOddsSummary(game) && <span className="text-[#8be9fd] font-medium tracking-tight">{gameOddsSummary(game)}</span>}
+                                        {gameOddsSummary(game) && game.gameTime && <span className="w-px h-3 bg-[#6272a4] flex-shrink-0" />}
+                                        {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
+                                      </div>
+                                    )}
                                   </div>
                                 </button>
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-0.5 flex-shrink-0 -mr-1">
                                   <button onClick={() => {
                                       setEditingGameId(game.id);
                                       setEditingGameLabel(game.label);
                                       setEditingGameTime(game.gameTime || "");
                                     }}
-                                    className="text-[#6272a4] px-2 py-1 rounded-lg border border-[#44475a] active:bg-[#282a36] text-xs">
-                                    Edit
+                                    aria-label="Edit game"
+                                    className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
+                                    <Pencil size={15} />
                                   </button>
                                   <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
-                                    className="text-[#6272a4] active:text-[#ff5555] p-2 -m-1 rounded-lg active:bg-[#282a36] flex-shrink-0">
-                                    <Trash2 size={16} />
+                                    className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg active:bg-[#282a36]">
+                                    <Trash2 size={15} />
                                   </button>
                                 </div>
                               </div>
@@ -1950,7 +1970,7 @@ export default function BetBoard() {
                 <input type="text" value={ticketName} onChange={(e) => setTicketName(e.target.value)}
                   autoCorrect="off" spellCheck={false} autoComplete="off"
                   placeholder="Parlay name (optional)"
-                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]" />
+                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#6272a4]" />
                 <p className="text-xs text-[#6272a4]">
                   Add each leg below, then save. Parlays are tracked only — no sizing. For a ladder, open a pick on the board and tap <span className="text-[#8be9fd]">+ Ladder</span>.
                 </p>
@@ -2008,12 +2028,12 @@ export default function BetBoard() {
                     <input type="text" value={newGameLabel} onChange={(e) => setNewGameLabel(e.target.value)}
                       autoCorrect="off" spellCheck={false} autoComplete="off"
                       placeholder="e.g. Broncos @ Lions"
-                      className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]"
+                      className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]"
                       autoFocus />
                     <div className="flex gap-2">
                       <input type="text" value={newGameHHMM} onChange={(e) => setNewGameHHMM(e.target.value)}
                         placeholder="7:30"
-                        className="flex-1 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                        className="flex-1 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
                       <div className="flex rounded-lg overflow-hidden border border-[#44475a] flex-shrink-0">
                         {["AM", "PM"].map((v) => (
                           <button key={v} type="button" onClick={() => setNewGameAmPm(v)}
@@ -2052,7 +2072,7 @@ export default function BetBoard() {
                   }}
                   autoCorrect="off" spellCheck={false} autoComplete="off" enterKeyHint={addMode === "parlay" ? "next" : "done"}
                   placeholder={addMode === "parlay" ? "e.g. Broncos -3.5 (one leg)" : "e.g. Broncos -3.5, Over 47.5, Nix 300+ yds"}
-                  className="mt-1 w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#44475a]" />
+                  className="mt-1 w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#6272a4]" />
               </div>
             )}
 
@@ -2095,7 +2115,7 @@ export default function BetBoard() {
                         onFocus={() => setSourceDropdownOpen(true)}
                         autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                         placeholder={selectedSourceIds.size === 0 ? "Search sources…" : ""}
-                        className="flex-1 min-w-[100px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#44475a] outline-none py-0.5"
+                        className="flex-1 min-w-[100px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#6272a4] outline-none py-0.5"
                       />
                     </div>
 
@@ -2230,7 +2250,7 @@ export default function BetBoard() {
                   onChange={(e) => setUnitValue(e.target.value)}
                   onBlur={() => persistSettings(sources, unitValue)}
                   placeholder="e.g. 25"
-                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]"
+                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4] font-mono tabular-nums"
                 />
                 <span className="text-sm text-[#6272a4]">per unit</span>
               </div>
@@ -2243,7 +2263,7 @@ export default function BetBoard() {
                   onKeyDown={(e) => e.key === "Enter" && addSource()}
                   autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                   placeholder="One name or handle"
-                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
                 <button onClick={addSource} className="bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2">
                   <Plus size={18} />
                 </button>
@@ -2253,7 +2273,7 @@ export default function BetBoard() {
                   autoCapitalize="off" autoCorrect="off" spellCheck={false}
                   placeholder={"Or paste many at once, one per line:\n@CapperA\n@CapperB\nBestBets.com"}
                   rows={4}
-                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                  className="w-full bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-[#6272a4] flex-shrink-0">Default tier:</span>
                   {["A","B","C"].map((t) => (
@@ -2345,7 +2365,7 @@ export default function BetBoard() {
                   onKeyDown={(e) => e.key === "Enter" && addBook()}
                   autoCapitalize="words" autoCorrect="off" spellCheck={false}
                   placeholder="e.g. DraftKings"
-                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
                 <button onClick={addBook} className="bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2">
                   <Plus size={18} />
                 </button>
@@ -2379,7 +2399,7 @@ export default function BetBoard() {
                   onKeyDown={(e) => e.key === "Enter" && addPromoType()}
                   autoCapitalize="words" autoCorrect="off" spellCheck={false}
                   placeholder="e.g. Profit Boost"
-                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a]" />
+                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
                 <button onClick={addPromoType} className="bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2">
                   <Plus size={18} />
                 </button>
