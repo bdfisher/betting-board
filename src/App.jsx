@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import { storage } from "./storage";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import {
@@ -17,8 +17,10 @@ import {
   Pencil,
   HelpCircle,
   Tag,
+  RefreshCw,
 } from "lucide-react";
 import AddPickAutofill from "./AddPick";
+import sportsApi, { parseEspnEvent } from "./services/sportsApi";
 
 const LEAGUES = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "Golf", "Soccer", "Other"];
 
@@ -97,6 +99,35 @@ function scoreToDecision(edge) {
 
 function uid() {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Chip palette for books (Dracula accents). New books cycle through these.
+const CHIP_COLORS = ["#bd93f9", "#8be9fd", "#50fa7b", "#ff79c6", "#ffb86c", "#f1fa8c", "#ff5555", "#6272a4"];
+const bookColor = (book) => book?.color || "#bd93f9";
+// Translucent fill + border derived from the book's hex color, applied via inline style.
+const chipStyle = (hex) => ({ color: hex, backgroundColor: `${hex}22`, borderColor: `${hex}66` });
+
+// Sports we show the spread for (favorite only); everything else shows both moneylines.
+const SPREAD_SPORTS = new Set(["NFL", "NCAAF"]);
+const fmtSpread = (n) => (n === 0 ? "PK" : n > 0 ? `+${n}` : `${n}`);
+
+// Game header as "Away (odds) @ Home (odds)". Falls back to the stored label for
+// manual games or games without an odds snapshot.
+function gameLabelNode(game) {
+  const o = game.odds;
+  if (!o || !game.home || !game.away) return game.label;
+  const isSpread = SPREAD_SPORTS.has(game.sport);
+  const awayOdds = isSpread ? (o.favorite === "away" && o.spread != null ? fmtSpread(o.spread) : null) : o.awayML;
+  const homeOdds = isSpread ? (o.favorite === "home" && o.spread != null ? fmtSpread(o.spread) : null) : o.homeML;
+  // Each side is nowrap so "Commanders (+150)" never splits; the line can only break
+  // at the " @ " between them.
+  return (
+    <>
+      <span className="whitespace-nowrap">{game.away}{awayOdds && <span className="text-[#8be9fd] font-normal"> ({awayOdds})</span>}</span>
+      <span className="text-[#6272a4] font-normal"> @ </span>
+      <span className="whitespace-nowrap">{game.home}{homeOdds && <span className="text-[#8be9fd] font-normal"> ({homeOdds})</span>}</span>
+    </>
+  );
 }
 
 function findNflTeam(input) {
@@ -222,14 +253,9 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
   // Rung editor modal: null, or { rungId|null, label, star, sourceIds:Set, search }
   const [rungModal, setRungModal] = useState(null);
   const [rungDropOpen, setRungDropOpen] = useState(false);
-  const [rungDropRect, setRungDropRect] = useState(null);
   const [editingLabel, setEditingLabel] = useState(null);
-  const rungSrcRef = useRef(null);
 
   function openRungDrop() {
-    if (rungSrcRef.current) {
-      setRungDropRect(rungSrcRef.current.getBoundingClientRect());
-    }
     setRungDropOpen(true);
   }
 
@@ -591,9 +617,9 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
               {sources.length === 0 ? (
                 <div className="mt-1 text-xs text-[#6272a4]">No sources yet — add them in Setup.</div>
               ) : (
-                <div className="mt-1 relative">
+                <div className="mt-1">
                   {/* Chips + search input */}
-                  <div ref={rungSrcRef}
+                  <div
                     onClick={openRungDrop}
                     className="min-h-[42px] bg-[#282a36] border border-[#44475a] rounded-lg px-2.5 py-1.5 flex flex-wrap gap-1.5 items-center cursor-text"
                   >
@@ -622,17 +648,18 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                       value={rungModal.search}
                       onChange={(e) => { setRungModal({ ...rungModal, search: e.target.value }); openRungDrop(); }}
                       onFocus={openRungDrop}
+                      onBlur={() => setRungDropOpen(false)}
                       autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                       placeholder={rungModal.sourceIds.size === 0 ? "Search sources…" : ""}
                       className="flex-1 min-w-[80px] bg-transparent text-sm text-[#f8f8f2] placeholder-[#44475a] outline-none py-0.5"
                     />
                   </div>
-                  {/* Fixed dropdown — not clipped by modal's overflow-y-auto */}
-                  {rungDropOpen && rungDropRect && (
-                    <div
-                      className="fixed z-[70] bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-52"
-                      style={{ top: rungDropRect.bottom + 4, left: rungDropRect.left, width: rungDropRect.width }}
-                    >
+                  {/* Inline dropdown — sits in normal flow directly under the input so it
+                      stays attached even when the keyboard opens or the modal scrolls.
+                      onMouseDown (not onClick) keeps the input focused so picks register
+                      before the input's onBlur can close the list. */}
+                  {rungDropOpen && (
+                    <div className="mt-1 bg-[#21222c] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-52">
                       {sources
                         .filter((s) => s.name.toLowerCase().includes(rungModal.search.toLowerCase()))
                         .sort((a, b) => (TIER_EDGE[getSourceTier(b, sport)] || 0) - (TIER_EDGE[getSourceTier(a, sport)] || 0))
@@ -646,9 +673,8 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                                 const next = new Set(rungModal.sourceIds);
                                 active ? next.delete(s.id) : next.add(s.id);
                                 setRungModal({ ...rungModal, sourceIds: next, search: "" });
-                                setRungDropOpen(false);
                               }}
-                              className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 ${active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#21222c]"}`}>
+                              className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 ${active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#282a36]"}`}>
                               <span>{s.name}</span>
                               <div className="flex items-center gap-2">
                                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
@@ -663,9 +689,6 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                         </div>
                       )}
                     </div>
-                  )}
-                  {rungDropOpen && (
-                    <div className="fixed inset-0 z-[65]" onClick={() => { setRungDropOpen(false); setRungModal({ ...rungModal, search: "" }); }} />
                   )}
                 </div>
               )}
@@ -850,16 +873,42 @@ export default function BetBoard() {
   const [newPromoTypeName, setNewPromoTypeName] = useState("");
   const [promos, setPromos] = useState([]);
   const [promoView, setPromoView] = useState("all"); // "all" | "byBook" | "byType"
-  const [showAddPromo, setShowAddPromo] = useState(false);
   const [newPromoName, setNewPromoName] = useState("");
   const [newPromoBookId, setNewPromoBookId] = useState("");
   const [newPromoTypeId, setNewPromoTypeId] = useState("");
   const [editingPromoCell, setEditingPromoCell] = useState(null); // { promoId, field }
   const [editingPromoCellValue, setEditingPromoCellValue] = useState("");
+  const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [refreshingOdds, setRefreshingOdds] = useState(false);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
     supabase.auth.getUser().then(({ data }) => setUserEmail(data.user?.email ?? null));
+  }, []);
+
+  // iOS Safari mis-positions the fixed bottom bars in two cases: on first load the
+  // fixed nav can paint off the real bottom until a scroll forces a repaint, and when
+  // the soft keyboard opens it floats above the keyboard instead of the page bottom.
+  // We watch the visual viewport: nudge a repaint on mount, and hide the bottom bars
+  // while the keyboard is up (large gap between layout and visual viewport heights).
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const gap = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKeyboardOpen(gap > 120);
+    };
+    update();
+    const raf = requestAnimationFrame(() => window.scrollBy(0, 0)); // force first-load reflow
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    window.addEventListener("orientationchange", update);
+    return () => {
+      cancelAnimationFrame(raf);
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      window.removeEventListener("orientationchange", update);
+    };
   }, []);
 
   useEffect(() => {
@@ -1050,9 +1099,15 @@ export default function BetBoard() {
   function addBook() {
     const name = newBookName.trim();
     if (!name) return;
-    const next = [...books, { id: uid(), name }];
+    const color = CHIP_COLORS[books.length % CHIP_COLORS.length];
+    const next = [...books, { id: uid(), name, color }];
     setBooks(next); persistSettings(sources, unitValue, next, promoTypes);
     setNewBookName("");
+  }
+
+  function updateBookColor(id, color) {
+    const next = books.map((b) => b.id === id ? { ...b, color } : b);
+    setBooks(next); persistSettings(sources, unitValue, next, promoTypes);
   }
 
   function deleteBook(id) {
@@ -1075,7 +1130,9 @@ export default function BetBoard() {
   }
 
   // ----- promos -----
-  function addPromo() {
+  // Commits the permanent bottom "add row". Name + book are required; type is optional.
+  // Keeps the selected book so adding several promos to one book stays fast.
+  function commitNewPromo() {
     const name = newPromoName.trim();
     if (!name || !newPromoBookId) return;
     const promo = {
@@ -1088,7 +1145,7 @@ export default function BetBoard() {
     };
     const next = [...promos, promo];
     setPromos(next); persistBoard(games, picks, tickets, next);
-    setNewPromoName(""); setNewPromoBookId(""); setNewPromoTypeId(""); setShowAddPromo(false);
+    setNewPromoName(""); setNewPromoBookId(""); setNewPromoTypeId("");
     showToast("Promo added");
   }
 
@@ -1145,6 +1202,42 @@ export default function BetBoard() {
     setGames(nextGames);
     persistBoard(nextGames, picks);
     showToast(`Imported ${deduped.length} game${deduped.length === 1 ? "" : "s"}`);
+  }
+
+  // Manual "refresh lines" — re-fetch odds for autofilled games still in a pre-game
+  // state. ESPN drops odds once a game is live/final, so those keep their last snapshot.
+  async function refreshOdds() {
+    const apiGames = games.filter((g) => g.raw?.idEvent && g.sport && g.date);
+    if (apiGames.length === 0) {
+      showToast("No autofilled games to refresh", "remove");
+      return;
+    }
+    setRefreshingOdds(true);
+    try {
+      const keys = [...new Set(apiGames.map((g) => `${g.sport}__${g.date}`))];
+      const oddsById = {};
+      await Promise.all(keys.map(async (key) => {
+        const [sport, date] = key.split("__");
+        try {
+          const events = await sportsApi.getEventsByDate(sport, date);
+          events.forEach((ev) => {
+            const parsed = parseEspnEvent(ev);
+            if (parsed.odds) oddsById[parsed.id] = parsed.odds;
+          });
+        } catch { /* skip this group on failure */ }
+      }));
+      let updated = 0;
+      const nextGames = games.map((g) => {
+        const o = g.raw?.idEvent ? oddsById[g.raw.idEvent] : null;
+        if (o) { updated++; return { ...g, odds: o, oddsAsOf: new Date().toISOString() }; }
+        return g; // freeze existing snapshot (live/final or fetch failed)
+      });
+      setGames(nextGames);
+      persistBoard(nextGames, picks);
+      showToast(updated > 0 ? `Lines refreshed (${updated})` : "No open lines to update", updated > 0 ? "success" : "remove");
+    } finally {
+      setRefreshingOdds(false);
+    }
   }
 
   function deleteGame(id) {
@@ -1394,19 +1487,35 @@ export default function BetBoard() {
     return s ? s.tier : null;
   }
 
+  // A chip cell: a native <select> made invisible and laid over a chip <span> so the
+  // chip hugs its own text (not the column) while a single tap still opens the picker.
+  function renderChipSelect({ value, onChange, chipStyle, chipClass = "", text, children }) {
+    return (
+      <div className="relative inline-flex max-w-full align-middle">
+        <span style={chipStyle}
+          className={`inline-block h-6 leading-6 text-xs rounded px-1.5 truncate max-w-full border ${chipClass}`}>
+          {text}
+        </span>
+        <select value={value} onChange={onChange}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer">
+          {children}
+        </select>
+      </div>
+    );
+  }
+
   // ----- promo row helpers (defined here to close over state) -----
   // Uses <tr>/<td> so all rows share a single table-layout context and columns align.
-  // Each cell wraps its content in a fixed h-7 flex container so the row height never
-  // changes between view mode (span/button) and edit mode (input/select).
+  // Name is click-to-edit text; Book/Type are always-live chip dropdowns (edit in one
+  // tap, Notion-style). Each cell wraps content in a fixed h-7 flex container so row
+  // height never shifts. min-w-0 on the flex parents lets the Name column truncate.
   function renderPromoRow(p) {
+    const isEditingName = editingPromoCell?.promoId === p.id && editingPromoCell.field === "name";
     const book = books.find((b) => b.id === p.bookId);
     const type = promoTypes.find((t) => t.id === p.typeId);
-    const isEditingName = editingPromoCell?.promoId === p.id && editingPromoCell.field === "name";
-    const isEditingBook = editingPromoCell?.promoId === p.id && editingPromoCell.field === "bookId";
-    const isEditingType = editingPromoCell?.promoId === p.id && editingPromoCell.field === "typeId";
     return (
       <tr key={p.id} className={`border-b border-[#44475a] last:border-0 ${p.used ? "opacity-50" : ""}`}>
-        <td className="pl-2 pr-1 py-1.5 w-8">
+        <td className="pl-2 pr-1 py-1.5 w-7">
           <div className="h-7 flex items-center justify-center">
             <button onClick={() => togglePromoUsed(p.id)}
               className={`w-5 h-5 rounded border flex items-center justify-center ${p.used ? "bg-[#50fa7b]/20 border-[#50fa7b]/50" : "border-[#44475a]"}`}>
@@ -1415,7 +1524,7 @@ export default function BetBoard() {
           </div>
         </td>
         <td className="px-2 py-1.5">
-          <div className="h-7 flex items-center">
+          <div className="h-7 flex items-center min-w-0">
             {isEditingName ? (
               <input autoFocus value={editingPromoCellValue}
                 onChange={(e) => setEditingPromoCellValue(e.target.value)}
@@ -1433,46 +1542,87 @@ export default function BetBoard() {
             )}
           </div>
         </td>
-        <td className="px-2 py-1.5 w-28">
-          <div className="h-7 flex items-center">
-            {isEditingBook ? (
-              <select autoFocus value={editingPromoCellValue}
-                onChange={(e) => { updatePromoField(p.id, "bookId", e.target.value); setEditingPromoCell(null); }}
-                onBlur={() => setEditingPromoCell(null)}
-                className="w-full h-7 bg-[#21222c] border border-[#bd93f9] rounded text-xs px-1 text-[#f8f8f2]">
-                {books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            ) : (
-              <button onClick={() => { setEditingPromoCell({ promoId: p.id, field: "bookId" }); setEditingPromoCellValue(p.bookId); }}
-                className="w-full h-7 text-left text-xs bg-[#bd93f9]/20 text-[#bd93f9] border border-[#bd93f9]/30 rounded px-1.5 truncate">
-                {book?.name || "?"}
-              </button>
-            )}
+        <td className="px-1.5 py-1.5 w-16">
+          <div className="h-7 flex items-center min-w-0">
+            {renderChipSelect({
+              value: p.bookId || "",
+              onChange: (e) => updatePromoField(p.id, "bookId", e.target.value),
+              chipStyle: chipStyle(bookColor(book)),
+              text: book?.name || "—",
+              children: books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>),
+            })}
           </div>
         </td>
-        <td className="px-2 py-1.5 w-24">
-          <div className="h-7 flex items-center">
-            {isEditingType ? (
-              <select autoFocus value={editingPromoCellValue}
-                onChange={(e) => { updatePromoField(p.id, "typeId", e.target.value || null); setEditingPromoCell(null); }}
-                onBlur={() => setEditingPromoCell(null)}
-                className="w-full h-7 bg-[#21222c] border border-[#bd93f9] rounded text-xs px-1 text-[#f8f8f2]">
-                <option value="">None</option>
-                {promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-              </select>
-            ) : (
-              <button onClick={() => { setEditingPromoCell({ promoId: p.id, field: "typeId" }); setEditingPromoCellValue(p.typeId || ""); }}
-                className={`w-full h-7 text-left text-xs rounded px-1.5 truncate ${p.typeId ? "bg-[#8be9fd]/10 text-[#8be9fd] border border-[#8be9fd]/30" : "text-[#44475a]"}`}>
-                {type?.name || "—"}
-              </button>
-            )}
+        <td className="px-1.5 py-1.5 w-28">
+          <div className="h-7 flex items-center min-w-0">
+            {renderChipSelect({
+              value: p.typeId || "",
+              onChange: (e) => updatePromoField(p.id, "typeId", e.target.value || null),
+              chipClass: p.typeId ? "text-[#8be9fd] bg-[#8be9fd]/10 border-[#8be9fd]/30" : "text-[#6272a4] bg-transparent border-[#44475a]",
+              text: type?.name || "—",
+              children: [<option key="__none" value="">—</option>, ...promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)],
+            })}
           </div>
         </td>
-        <td className="pl-1 pr-2 py-1.5 w-8">
+        <td className="pl-1 pr-2 py-1.5 w-7">
           <div className="h-7 flex items-center justify-center">
             <button onClick={() => deletePromo(p.id)}
               className="text-[#6272a4] active:text-[#ff5555] p-1 rounded">
               <Trash2 size={15} />
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  // Permanent bottom "new row" — type a name, pick a book, Enter (or the ✓) commits.
+  function renderAddPromoRow() {
+    const canCommit = !!newPromoName.trim() && !!newPromoBookId;
+    return (
+      <tr className="border-t border-[#44475a] bg-[#21222c]/40">
+        <td className="pl-2 pr-1 py-1.5 w-7">
+          <div className="h-7 flex items-center justify-center text-[#6272a4]">
+            <Plus size={16} />
+          </div>
+        </td>
+        <td className="px-2 py-1.5">
+          <div className="h-7 flex items-center min-w-0">
+            <input value={newPromoName}
+              onChange={(e) => setNewPromoName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") commitNewPromo(); }}
+              placeholder="New promo…"
+              className="w-full h-7 bg-transparent text-sm text-[#f8f8f2] placeholder-[#6272a4] focus:outline-none" />
+          </div>
+        </td>
+        <td className="px-1.5 py-1.5 w-16">
+          <div className="h-7 flex items-center min-w-0">
+            {renderChipSelect({
+              value: newPromoBookId,
+              onChange: (e) => setNewPromoBookId(e.target.value),
+              chipStyle: newPromoBookId ? chipStyle(bookColor(books.find((b) => b.id === newPromoBookId))) : undefined,
+              chipClass: newPromoBookId ? "" : "text-[#6272a4] bg-transparent border-dashed border-[#44475a]",
+              text: newPromoBookId ? (books.find((b) => b.id === newPromoBookId)?.name || "Book") : "Book",
+              children: [<option key="__none" value="">Book</option>, ...books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)],
+            })}
+          </div>
+        </td>
+        <td className="px-1.5 py-1.5 w-28">
+          <div className="h-7 flex items-center min-w-0">
+            {renderChipSelect({
+              value: newPromoTypeId,
+              onChange: (e) => setNewPromoTypeId(e.target.value),
+              chipClass: newPromoTypeId ? "text-[#8be9fd] bg-[#8be9fd]/10 border-[#8be9fd]/30" : "text-[#6272a4] bg-transparent border-dashed border-[#44475a]",
+              text: newPromoTypeId ? (promoTypes.find((t) => t.id === newPromoTypeId)?.name || "Type") : "Type",
+              children: [<option key="__none" value="">Type</option>, ...promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)],
+            })}
+          </div>
+        </td>
+        <td className="pl-1 pr-2 py-1.5 w-7">
+          <div className="h-7 flex items-center justify-center">
+            <button onClick={commitNewPromo} disabled={!canCommit}
+              className={`p-1 rounded ${canCommit ? "text-[#50fa7b] active:scale-90 transition-transform" : "text-[#44475a]"}`}>
+              <Check size={16} />
             </button>
           </div>
         </td>
@@ -1508,14 +1658,23 @@ export default function BetBoard() {
     );
   }
 
+  // The promos table wants more horizontal room than the mobile-width tabs; widen the
+  // header + content when it's the active tab. The bottom nav stays fixed at max-w-md
+  // so it doesn't visibly jump as you switch tabs.
+  const shellWidth = activeTab === "promos" ? "max-w-2xl" : "max-w-md";
+
   return (
     <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
-      <div className="px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] max-w-md mx-auto flex items-baseline justify-between gap-2">
+      <div className={`px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] ${shellWidth} mx-auto flex items-baseline justify-between gap-2`}>
         <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">The Notebook</h1>
-        <p className="text-xs text-[#6272a4] flex-shrink-0">Every pick, one place.</p>
+        <button onClick={refreshOdds} disabled={refreshingOdds}
+          className="flex items-center gap-1.5 text-xs text-[#6272a4] active:text-[#bd93f9] flex-shrink-0 disabled:opacity-50 self-center">
+          <RefreshCw size={13} className={refreshingOdds ? "animate-spin" : ""} />
+          {refreshingOdds ? "Refreshing…" : "Refresh lines"}
+        </button>
       </div>
 
-      <div className="max-w-md mx-auto px-4 pt-4">
+      <div className={`${shellWidth} mx-auto px-4 pt-4`}>
         {activeTab === "board" && (
           <div className="space-y-4">
             {picks.length === 0 && games.length === 0 && tickets.length === 0 ? (
@@ -1573,11 +1732,13 @@ export default function BetBoard() {
                             <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
                               <div className={`flex items-center justify-between px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
                                 <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
-                                  className="flex items-center gap-1.5 min-w-0 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
-                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0" />}
-                                  <span className="text-sm font-semibold text-[#f8f8f2] truncate">{game.label}</span>
-                                  {game.gameTime && <span className="text-xs text-[#6272a4] flex-shrink-0">{game.gameTime}</span>}
-                                  {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
+                                  className="flex items-start gap-1.5 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
+                                  <div className="min-w-0 flex-1">
+                                    <span className="text-sm font-semibold text-[#f8f8f2]">{gameLabelNode(game)}</span>
+                                    {game.gameTime && <span className="text-xs text-[#6272a4] ml-1.5 whitespace-nowrap">· {game.gameTime}</span>}
+                                    {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] ml-1.5">({gamePicks.length})</span>}
+                                  </div>
                                 </button>
                                 <div className="flex items-center gap-2">
                                   <button onClick={() => {
@@ -1685,11 +1846,13 @@ export default function BetBoard() {
                             <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
                               <div className={`flex items-center justify-between px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
                                 <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
-                                  className="flex items-center gap-1.5 min-w-0 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
-                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0" />}
-                                  <span className="text-sm font-semibold text-[#f8f8f2] truncate">{game.label}</span>
-                                  {game.gameTime && <span className="text-xs text-[#6272a4] flex-shrink-0">{game.gameTime}</span>}
-                                  {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
+                                  className="flex items-start gap-1.5 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+                                  {gameCollapsed ? <ChevronRight size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={15} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
+                                  <div className="min-w-0 flex-1">
+                                    <span className="text-sm font-semibold text-[#f8f8f2]">{gameLabelNode(game)}</span>
+                                    {game.gameTime && <span className="text-xs text-[#6272a4] ml-1.5 whitespace-nowrap">· {game.gameTime}</span>}
+                                    {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] ml-1.5">({gamePicks.length})</span>}
+                                  </div>
                                 </button>
                                 <div className="flex items-center gap-2">
                                   <button onClick={() => {
@@ -2190,8 +2353,15 @@ export default function BetBoard() {
               {books.length > 0 && (
                 <div className="mt-2 space-y-1.5">
                   {books.map((b) => (
-                    <div key={b.id} className="bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 flex items-center">
-                      <span className="flex-1 text-sm text-[#f8f8f2]">{b.name}</span>
+                    <div key={b.id} className="bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 flex items-center gap-2">
+                      <span className="text-xs rounded px-1.5 py-0.5 border truncate max-w-[8rem]" style={chipStyle(bookColor(b))}>{b.name}</span>
+                      <div className="flex-1 flex items-center gap-1 flex-wrap justify-end">
+                        {CHIP_COLORS.map((c) => (
+                          <button key={c} onClick={() => updateBookColor(b.id, c)} aria-label={`Set ${b.name} color`}
+                            className={`w-5 h-5 rounded-full border-2 ${bookColor(b) === c ? "border-[#f8f8f2]" : "border-transparent"}`}
+                            style={{ backgroundColor: c }} />
+                        ))}
+                      </div>
                       <button onClick={() => deleteBook(b.id)} aria-label="Delete book"
                         className="text-[#6272a4] active:text-[#ff5555] p-1.5 -mr-1 rounded-lg">
                         <Trash2 size={16} />
@@ -2282,77 +2452,35 @@ export default function BetBoard() {
                   </button>
                 ))}
               </div>
-              <div className="ml-auto flex gap-2">
-                <button onClick={() => setShowAddPromo((prev) => !prev)}
-                  className="flex items-center gap-1 text-xs bg-[#bd93f9] text-[#282a36] font-semibold rounded-lg px-2.5 py-1.5 active:scale-95 transition-transform">
-                  <Plus size={14} /> Add
+              {promos.length > 0 && (
+                <button onClick={clearAllPromos}
+                  className="ml-auto text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg border border-[#44475a] active:scale-95 transition-transform">
+                  <Trash2 size={16} />
                 </button>
-                {promos.length > 0 && (
-                  <button onClick={clearAllPromos}
-                    className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg border border-[#44475a] active:scale-95 transition-transform">
-                    <Trash2 size={16} />
-                  </button>
-                )}
-              </div>
+              )}
             </div>
 
-            {showAddPromo && (
-              <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
-                <input type="text" value={newPromoName} onChange={(e) => setNewPromoName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addPromo()}
-                  placeholder="Promo name (required)"
-                  autoFocus
-                  className="w-full bg-[#21222c] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#44475a] text-[#f8f8f2]" />
-                <select value={newPromoBookId} onChange={(e) => setNewPromoBookId(e.target.value)}
-                  className="w-full bg-[#21222c] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]">
-                  <option value="">Select book… (required)</option>
-                  {books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-                </select>
-                {books.length === 0 && (
-                  <p className="text-xs text-[#ff5555]">Add sportsbooks in Setup first.</p>
-                )}
-                <select value={newPromoTypeId} onChange={(e) => setNewPromoTypeId(e.target.value)}
-                  className="w-full bg-[#21222c] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]">
-                  <option value="">No type (optional)</option>
-                  {promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-                <div className="flex gap-2">
-                  <button onClick={addPromo} disabled={!newPromoName.trim() || !newPromoBookId}
-                    className="flex-1 py-2 rounded-lg text-sm font-semibold bg-[#bd93f9] text-[#282a36] disabled:bg-[#21222c] disabled:text-[#44475a] active:scale-[0.98] transition-transform">
-                    Save
-                  </button>
-                  <button onClick={() => { setShowAddPromo(false); setNewPromoName(""); setNewPromoBookId(""); setNewPromoTypeId(""); }}
-                    className="px-4 py-2 rounded-lg text-sm text-[#6272a4] bg-[#21222c] border border-[#44475a]">
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {promos.length === 0 ? (
-              <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
-                No promos yet.{" "}
-                <button onClick={() => setShowAddPromo(true)} className="text-[#bd93f9] underline">Add your first promo</button>
-              </div>
-            ) : (
-              <div className="bg-[#343746] border border-[#44475a] rounded-lg overflow-hidden">
-                <table className="w-full table-fixed border-collapse">
-                  <thead>
-                    <tr className="bg-[#282a36] border-b border-[#44475a]">
-                      <th className="w-8 py-1.5" />
-                      <th className="text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Name</th>
-                      <th className="w-28 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Book</th>
-                      <th className="w-24 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Type</th>
-                      <th className="w-8 py-1.5" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {promoView === "all" && promos.map(renderPromoRow)}
-                    {promoView === "byBook" && renderPromosByGroup(promos, "bookId", books)}
-                    {promoView === "byType" && renderPromosByGroup(promos, "typeId", promoTypes)}
-                  </tbody>
-                </table>
-              </div>
+            <div className="bg-[#343746] border border-[#44475a] rounded-lg overflow-hidden">
+              <table className="w-full table-fixed border-collapse">
+                <thead>
+                  <tr className="bg-[#282a36] border-b border-[#44475a]">
+                    <th className="w-7 py-1.5" />
+                    <th className="text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Name</th>
+                    <th className="w-16 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-1.5 font-normal">Book</th>
+                    <th className="w-28 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-1.5 font-normal">Type</th>
+                    <th className="w-7 py-1.5" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {promoView === "all" && promos.map(renderPromoRow)}
+                  {promoView === "byBook" && renderPromosByGroup(promos, "bookId", books)}
+                  {promoView === "byType" && renderPromosByGroup(promos, "typeId", promoTypes)}
+                  {renderAddPromoRow()}
+                </tbody>
+              </table>
+            </div>
+            {books.length === 0 && (
+              <p className="text-xs text-[#ff5555] px-1">Add sportsbooks in Setup before creating promos.</p>
             )}
           </div>
         )}
@@ -2406,7 +2534,7 @@ export default function BetBoard() {
       {/* Help FAB */}
       <button
         onClick={() => setShowHelp(true)}
-        className="fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-4 z-40 w-12 h-12 rounded-full bg-[#343746] border border-[#6272a4] flex items-center justify-center text-[#6272a4] shadow-lg active:scale-95 transition-transform"
+        className={`fixed bottom-[calc(5.5rem+env(safe-area-inset-bottom))] right-4 z-40 w-12 h-12 rounded-full bg-[#343746] border border-[#6272a4] flex items-center justify-center text-[#6272a4] shadow-lg active:scale-95 transition-transform ${keyboardOpen ? "opacity-0 pointer-events-none" : ""}`}
         aria-label="How scoring works"
       >
         <HelpCircle size={22} />
@@ -2479,7 +2607,7 @@ export default function BetBoard() {
         </div>
       )}
 
-      <div className="fixed bottom-0 inset-x-0 bg-[#343746] border-t border-[#44475a] pb-safe">
+      <div className={`fixed bottom-0 inset-x-0 bg-[#343746] border-t border-[#44475a] pb-safe transition-transform duration-150 ${keyboardOpen ? "translate-y-full" : "translate-y-0"}`}>
         <div className="max-w-md mx-auto flex">
           {[
             { key: "board", label: "Board", Icon: ClipboardList },
