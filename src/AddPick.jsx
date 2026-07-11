@@ -43,7 +43,29 @@ function mapEspnEventToGame(event, sport) {
     gameTime:  parsed.date ? formatCentralTime(parsed.date) : "",
     createdAt: new Date().toISOString(),
     raw:       { idEvent: parsed.id },
+    odds:      parsed.odds || null,
+    oddsAsOf:  parsed.odds ? new Date().toISOString() : null,
   };
+}
+
+// "-2.5" style; favorite spreads are negative, 0 is a pick'em.
+function fmtSpread(n) {
+  if (n === 0) return "PK";
+  return n > 0 ? `+${n}` : `${n}`;
+}
+
+// Odds annotation for a game preview row: favorite's spread for NFL/NCAAF, both
+// moneylines otherwise. Returns "" when the game has no odds snapshot.
+function oddsPreview(g) {
+  const o = g.odds;
+  if (!o) return "";
+  if (g.sport === "NFL" || g.sport === "NCAAF") {
+    if (o.spread == null || !o.favorite) return "";
+    const team = o.favorite === "home" ? g.home : g.away;
+    return `${team} ${fmtSpread(o.spread)}`;
+  }
+  if (o.awayML && o.homeML) return `${o.awayML} / ${o.homeML}`;
+  return "";
 }
 
 const LS_CACHE = "betboard:espn_cache:";
@@ -204,8 +226,9 @@ export default function AddPickAutofill({ selectedSport, onImportGames }) {
                       </svg>
                     )}
                   </div>
-                  <div className="flex-1 min-w-0 truncate">
-                    {g.away && g.home ? `${g.away} @ ${g.home}` : g.id}
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate">{g.away && g.home ? `${g.away} @ ${g.home}` : g.id}</div>
+                    {oddsPreview(g) && <div className="text-[11px] text-[#8be9fd] truncate">{oddsPreview(g)}</div>}
                   </div>
                   <div className="text-xs text-[#6272a4] ml-1 whitespace-nowrap flex-shrink-0">
                     {fetchMode === "week" && g.date ? `${g.date}  ` : ""}{g.gameTime}

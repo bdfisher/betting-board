@@ -22,7 +22,9 @@
       "WebSearch",
       "PowerShell(npm run build 2>&1)",
       "PowerShell(npm run dev)",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(curl -s \"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260711\")",
+      "Bash(npx vite *)"
     ]
   }
 }
