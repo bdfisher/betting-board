@@ -759,20 +759,23 @@ function fmtUnits(n) {
   return `${+n.toFixed(2)}u`;
 }
 
-function TicketCard({ ticket, sourcesMap, toggleTicketStar, toggleTicketPlaced, deleteTicket }) {
+function TicketCard({ ticket, games, sourcesMap, toggleTicketStar, toggleTicketPlaced, deleteTicket }) {
   const legs = ticket.legs || [];
+  const [collapsed, setCollapsed] = useState(false);
   return (
     <div className="bg-[#343746] border border-[#44475a] rounded-lg">
-      <div className="flex items-center justify-between px-3 py-2.5 border-b border-[#44475a]">
-        <div className="flex items-center gap-1.5 min-w-0">
+      <div className={`flex items-center justify-between gap-2 px-3 py-2.5 ${collapsed ? "" : "border-b border-[#44475a]"}`}>
+        <button onClick={() => setCollapsed((c) => !c)} aria-expanded={!collapsed}
+          className="flex items-center gap-1.5 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+          {collapsed ? <ChevronRight size={16} className="text-[#6272a4] flex-shrink-0" /> : <ChevronDown size={16} className="text-[#6272a4] flex-shrink-0" />}
           <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border flex-shrink-0 bg-[#bd93f9]/15 text-[#bd93f9] border-[#bd93f9]/30">
             Parlay
           </span>
-          <span className={`text-sm font-semibold truncate ${ticket.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>
+          <span className={`text-sm font-semibold truncate min-w-0 ${ticket.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>
             {ticket.name || `${legs.length}-leg parlay`}
           </span>
           <span className="text-[10px] text-[#6272a4] flex-shrink-0">{legs.length} legs</span>
-        </div>
+        </button>
         <div className="flex items-center gap-0.5 flex-shrink-0">
           <button onClick={() => toggleTicketStar(ticket.id)} aria-label={ticket.star ? "Unstar" : "Star"}
             className={`p-2 -my-1 rounded-lg active:bg-[#282a36] ${ticket.star ? "text-[#bd93f9]" : "text-[#6272a4]"}`}>
@@ -790,9 +793,11 @@ function TicketCard({ ticket, sourcesMap, toggleTicketStar, toggleTicketPlaced, 
         </div>
       </div>
 
+      {!collapsed && (
       <ol className="divide-y divide-[#44475a]">
         {legs.map((leg, i) => {
           const legSources = (leg.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
+          const legGame = (games || []).find((g) => g.id === leg.gameId);
           return (
             <li key={leg.id} className="px-3 py-2 flex items-start gap-2">
               <span className="text-[10px] text-[#6272a4] mt-1 w-4 flex-shrink-0 text-right">{i + 1}</span>
@@ -800,6 +805,7 @@ function TicketCard({ ticket, sourcesMap, toggleTicketStar, toggleTicketPlaced, 
                 <span className={`text-sm ${ticket.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{leg.label}</span>
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
                   <span className="text-[10px] text-[#6272a4]">{leg.sport}</span>
+                  {legGame && <span className="text-[10px] text-[#8b93b8]">{gameNames(legGame)}</span>}
                   {legSources.map((src) => {
                     const tier = getSourceTier(src, leg.sport);
                     return (
@@ -815,6 +821,7 @@ function TicketCard({ ticket, sourcesMap, toggleTicketStar, toggleTicketPlaced, 
           );
         })}
       </ol>
+      )}
     </div>
   );
 }
@@ -861,6 +868,15 @@ export default function BetBoard() {
   const [expandedPickId, setExpandedPickId] = useState(null);
   const [collapsedSports, setCollapsedSports] = useState(new Set());
   const [collapsedGames, setCollapsedGames] = useState(new Set());
+  // Board view filter: "all" shows every imported game (empty ones as dense one-line
+  // rows), "picks" shows only games you've logged a pick on. Persisted across reloads.
+  const [boardFilter, setBoardFilter] = useState(() => {
+    try { return localStorage.getItem("betboard:boardFilter") || "all"; } catch { return "all"; }
+  });
+  function changeBoardFilter(v) {
+    setBoardFilter(v);
+    try { localStorage.setItem("betboard:boardFilter", v); } catch {}
+  }
   const [sourceSearch, setSourceSearch] = useState("");
   const [sourceDropdownOpen, setSourceDropdownOpen] = useState(false);
   const [toast, setToast] = useState(null); // { message, type: "success"|"remove" }
@@ -1660,6 +1676,155 @@ export default function BetBoard() {
     );
   }
 
+  // A parlay's "home" sport is the single sport its legs share; if the legs span more
+  // than one sport (or carry none) it's multi-sport and lives in the top Parlays block.
+  const parlaySport = (t) => {
+    const sports = [...new Set((t.legs || []).map((l) => l.sport).filter(Boolean))];
+    return sports.length === 1 ? sports[0] : null;
+  };
+  const topTickets = tickets.filter((t) => parlaySport(t) === null);
+  const ticketsForSport = (sport) => tickets.filter((t) => parlaySport(t) === sport);
+  // Every leg with an assigned game is echoed under that game as a "Parlay Leg" row.
+  const legsForGame = (gameId) =>
+    tickets.flatMap((t) => (t.legs || [])
+      .filter((l) => l.gameId === gameId)
+      .map((l) => ({ leg: l, ticket: t })));
+
+  const renderParlayLegRows = (gameLegs) =>
+    gameLegs.map(({ leg, ticket }) => {
+      const legSources = (leg.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
+      return (
+        <div key={leg.id} className="px-3 py-2 flex items-start gap-2">
+          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full border flex-shrink-0 mt-0.5 bg-[#bd93f9]/15 text-[#bd93f9] border-[#bd93f9]/30">
+            Parlay Leg
+          </span>
+          <div className="min-w-0 flex-1">
+            <span className={`text-sm ${ticket.placed ? "line-through text-[#6272a4]" : "text-[#f8f8f2]"}`}>{leg.label}</span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-[10px] text-[#6272a4]">
+              <span>in {ticket.name || `${(ticket.legs || []).length}-leg parlay`}</span>
+              {legSources.map((src) => {
+                const tier = getSourceTier(src, leg.sport);
+                return (
+                  <span key={src.id} className="flex items-center gap-1">
+                    {src.name}
+                    <span className={`px-1 py-px rounded ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      );
+    });
+
+  // Renders one game on the board. Games with no picks or parlay legs collapse to a
+  // single dense "slate" line (matchup · odds · time) so a full imported week stays
+  // skimmable; games with picks or parlay legs keep the full, collapsible card. Shared
+  // by the NFL and per-sport sections so the two blocks don't drift apart.
+  const editForm = (game) =>
+    editingGameId === game.id && (
+      <div className="px-3 py-3 border-t border-[#44475a] bg-[#2d2f3b] rounded-b-lg space-y-2">
+        <input value={editingGameLabel} onChange={(e) => setEditingGameLabel(e.target.value)}
+          className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
+          placeholder="Game label" />
+        <input value={editingGameTime} onChange={(e) => setEditingGameTime(e.target.value)}
+          className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
+          placeholder="Game time (optional)" />
+        <div className="flex gap-2">
+          <button onClick={() => updateGame(game.id, editingGameLabel.trim() || game.label, editingGameTime.trim())}
+            className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold">
+            Save
+          </button>
+          <button onClick={() => setEditingGameId(null)}
+            className="flex-1 bg-[#21222c] border border-[#44475a] rounded-lg py-2 text-sm text-[#6272a4]">
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+
+  const renderGameNode = (game, sport) => {
+    const gamePicks = picks
+      .filter((p) => p.gameId === game.id)
+      .sort((a, b) => scorePick(b, sourcesMap, sport).edge - scorePick(a, sourcesMap, sport).edge);
+    const gameLegs = legsForGame(game.id);
+
+    // No picks and no parlay legs → one tight line. Emptiness is implied by the compact
+    // form, so there's no chevron or body. Edit opens the inline form; delete stays put.
+    if (gamePicks.length === 0 && gameLegs.length === 0) {
+      return (
+        <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
+          <div className="flex items-center justify-between gap-2 px-3 py-2">
+            <span className="text-[13px] font-medium text-[#e8e9f0] truncate min-w-0 flex-1">{gameNames(game)}</span>
+            <div className="flex items-center gap-2 flex-shrink-0 text-[11px] font-mono tabular-nums">
+              {gameOddsSummary(game) && <span className="text-[#8be9fd] tracking-tight">{gameOddsSummary(game)}</span>}
+              {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
+              <div className="flex items-center gap-0.5 -mr-1">
+                <button onClick={() => { setEditingGameId(game.id); setEditingGameLabel(game.label); setEditingGameTime(game.gameTime || ""); }}
+                  aria-label="Edit game" className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
+                  <Pencil size={14} />
+                </button>
+                <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
+                  className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg active:bg-[#282a36]">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            </div>
+          </div>
+          {editForm(game)}
+        </div>
+      );
+    }
+
+    const gameCollapsed = collapsedGames.has(game.id);
+    return (
+      <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
+        <div className={`flex items-start justify-between gap-2 px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
+          <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
+            className="flex items-start gap-2 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
+            {gameCollapsed ? <ChevronRight size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-sm font-semibold text-[#f8f8f2] truncate min-w-0">{gameNames(game)}</span>
+                {gameCollapsed && (gamePicks.length + gameLegs.length) > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length + gameLegs.length})</span>}
+              </div>
+              {(gameOddsSummary(game) || game.gameTime) && (
+                <div className="flex items-center gap-2.5 mt-1 text-[11px] font-mono tabular-nums">
+                  {gameOddsSummary(game) && <span className="text-[#8be9fd] font-medium tracking-tight">{gameOddsSummary(game)}</span>}
+                  {gameOddsSummary(game) && game.gameTime && <span className="w-px h-3 bg-[#6272a4] flex-shrink-0" />}
+                  {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
+                </div>
+              )}
+            </div>
+          </button>
+          <div className="flex items-center gap-0.5 flex-shrink-0 -mr-1">
+            <button onClick={() => { setEditingGameId(game.id); setEditingGameLabel(game.label); setEditingGameTime(game.gameTime || ""); }}
+              aria-label="Edit game" className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
+              <Pencil size={15} />
+            </button>
+            <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
+              className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg active:bg-[#282a36]">
+              <Trash2 size={15} />
+            </button>
+          </div>
+        </div>
+        {editForm(game)}
+        {!gameCollapsed && (
+          <div className="divide-y divide-[#44475a]">
+            {gamePicks.map((pick) => (
+              <PickCard key={pick.id} pick={pick} sport={sport} games={games.filter((g) => g.sport === sport)}
+                sources={sources} sourcesMap={sourcesMap}
+                expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
+                toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
+                movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
+            ))}
+            {renderParlayLegRows(gameLegs)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   // The promos table wants more horizontal room than the mobile-width tabs; widen the
   // header + content when it's the active tab. The bottom nav stays fixed at max-w-md
   // so it doesn't visibly jump as you switch tabs.
@@ -1686,16 +1851,36 @@ export default function BetBoard() {
               </div>
             ) : (
               <>
-                {/* ── Parlays ── */}
-                {tickets.length > 0 && (
+                {/* ── Picks / All filter — pinned so it stays reachable while scrolling a long slate ── */}
+                <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-[#282a36]">
+                  <div className="flex rounded-lg border border-[#44475a] text-xs overflow-hidden w-max">
+                    {[["all", "All"], ["picks", "Picks"]].map(([v, l]) => (
+                      <button key={v} onClick={() => changeBoardFilter(v)} aria-pressed={boardFilter === v}
+                        className={`px-3 py-1.5 ${boardFilter === v ? "bg-[#bd93f9] text-[#282a36] font-semibold" : "bg-[#343746] text-[#6272a4]"}`}>
+                        {l}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {boardFilter === "picks" && picks.length === 0 && tickets.length === 0 && (
+                  <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
+                    No picks logged yet. Switch to{" "}
+                    <button onClick={() => changeBoardFilter("all")} className="text-[#bd93f9] underline">All</button>{" "}
+                    to see your slate.
+                  </div>
+                )}
+
+                {/* ── Multi-sport parlays — single-sport ones live inside their sport ── */}
+                {topTickets.length > 0 && (
                   <div>
                     <div className="flex items-center gap-1.5 mb-2">
                       <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">Parlays</span>
-                      <span className="text-[10px] text-[#6272a4]">({tickets.length})</span>
+                      <span className="text-[10px] text-[#6272a4]">({topTickets.length})</span>
                     </div>
                     <div className="space-y-2">
-                      {tickets.map((t) => (
-                        <TicketCard key={t.id} ticket={t} sourcesMap={sourcesMap}
+                      {topTickets.map((t) => (
+                        <TicketCard key={t.id} ticket={t} games={games} sourcesMap={sourcesMap}
                           toggleTicketStar={toggleTicketStar} toggleTicketPlaced={toggleTicketPlaced}
                           deleteTicket={deleteTicket} />
                       ))}
@@ -1704,9 +1889,12 @@ export default function BetBoard() {
                 )}
 
                 {/* ── NFL section ── */}
-                {((games.filter((g) => g.sport === "NFL").length > 0) || picks.some((p) => p.sport === "NFL")) && (() => {
+                {(picks.some((p) => p.sport === "NFL") || ticketsForSport("NFL").length > 0 || (boardFilter === "all" && games.some((g) => g.sport === "NFL"))) && (() => {
                   const nflCollapsed = collapsedSports.has("NFL");
-                  const nflCount = picks.filter((p) => p.sport === "NFL").length;
+                  const nflTickets = ticketsForSport("NFL");
+                  const nflCount = (boardFilter === "picks"
+                    ? picks.filter((p) => p.sport === "NFL").length
+                    : games.filter((g) => g.sport === "NFL").length) + nflTickets.length;
                   return (
                   <div>
                     <div className="flex items-center justify-between mb-2">
@@ -1714,7 +1902,7 @@ export default function BetBoard() {
                         className="flex items-center gap-1.5 -ml-1 p-1 rounded-lg active:bg-[#343746]">
                         {nflCollapsed ? <ChevronRight size={15} className="text-[#6272a4]" /> : <ChevronDown size={15} className="text-[#6272a4]" />}
                         <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">NFL</span>
-                        {nflCollapsed && <span className="text-[10px] text-[#6272a4]">({nflCount})</span>}
+                        <span className="text-[10px] text-[#6272a4]">({nflCount})</span>
                       </button>
                       <button onClick={() => deleteSport("NFL")} aria-label="Delete all NFL"
                         className="text-[#6272a4] active:text-[#ff5555] active:bg-[#343746] p-1.5 -m-1 rounded-lg">
@@ -1724,83 +1912,9 @@ export default function BetBoard() {
                     {!nflCollapsed && (
                     <div className="space-y-2">
                       {games.filter((g) => g.sport === "NFL")
+                        .filter((g) => boardFilter === "all" || picks.some((p) => p.gameId === g.id) || legsForGame(g.id).length > 0)
                         .sort((a, b) => (a.gameTime || "zzz").localeCompare(b.gameTime || "zzz"))
-                        .map((game) => {
-                          const gamePicks = picks
-                            .filter((p) => p.gameId === game.id)
-                            .sort((a, b) => scorePick(b, sourcesMap, "NFL").edge - scorePick(a, sourcesMap, "NFL").edge);
-                          const gameCollapsed = collapsedGames.has(game.id);
-                          return (
-                            <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
-                              <div className={`flex items-start justify-between gap-2 px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
-                                <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
-                                  className="flex items-start gap-2 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
-                                  {gameCollapsed ? <ChevronRight size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5 min-w-0">
-                                      <span className="text-sm font-semibold text-[#f8f8f2] truncate min-w-0">{gameNames(game)}</span>
-                                      {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
-                                    </div>
-                                    {(gameOddsSummary(game) || game.gameTime) && (
-                                      <div className="flex items-center gap-2.5 mt-1 text-[11px] font-mono tabular-nums">
-                                        {gameOddsSummary(game) && <span className="text-[#8be9fd] font-medium tracking-tight">{gameOddsSummary(game)}</span>}
-                                        {gameOddsSummary(game) && game.gameTime && <span className="w-px h-3 bg-[#6272a4] flex-shrink-0" />}
-                                        {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
-                                      </div>
-                                    )}
-                                  </div>
-                                </button>
-                                <div className="flex items-center gap-0.5 flex-shrink-0 -mr-1">
-                                  <button onClick={() => {
-                                      setEditingGameId(game.id);
-                                      setEditingGameLabel(game.label);
-                                      setEditingGameTime(game.gameTime || "");
-                                    }}
-                                    aria-label="Edit game"
-                                    className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
-                                    <Pencil size={15} />
-                                  </button>
-                                  <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
-                                    className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg active:bg-[#282a36]">
-                                    <Trash2 size={15} />
-                                  </button>
-                                </div>
-                              </div>
-                              {editingGameId === game.id && (
-                                <div className="px-3 py-3 border-t border-[#44475a] bg-[#2d2f3b] rounded-b-lg space-y-2">
-                                  <input value={editingGameLabel} onChange={(e) => setEditingGameLabel(e.target.value)}
-                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
-                                    placeholder="Game label" />
-                                  <input value={editingGameTime} onChange={(e) => setEditingGameTime(e.target.value)}
-                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
-                                    placeholder="Game time (optional)" />
-                                  <div className="flex gap-2">
-                                    <button onClick={() => updateGame(game.id, editingGameLabel.trim() || game.label, editingGameTime.trim())}
-                                      className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold">
-                                      Save
-                                    </button>
-                                    <button onClick={() => setEditingGameId(null)}
-                                      className="flex-1 bg-[#21222c] border border-[#44475a] rounded-lg py-2 text-sm text-[#6272a4]">
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                              {!gameCollapsed && (gamePicks.length === 0 ? (
-                                <div className="px-3 py-2 text-xs text-[#6272a4]">No picks for this game yet.</div>
-                              ) : (
-                                <div className="divide-y divide-[#44475a]">
-                                  {gamePicks.map((pick) => (
-                                    <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
-                                      sources={sources} sourcesMap={sourcesMap}
-                                      expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
-                                  ))}
-                                </div>
-                              ))}
-                            </div>
-                          );
-                        })}
+                        .map((game) => renderGameNode(game, "NFL"))}
                       {/* Orphan NFL picks (no game assigned) */}
                       {picks.filter((p) => p.sport === "NFL" && !p.gameId).length > 0 && (
                         <div className="bg-[#343746] border border-[#44475a] rounded-lg">
@@ -1817,6 +1931,12 @@ export default function BetBoard() {
                           </div>
                         </div>
                       )}
+                      {/* Single-sport NFL parlays live at the bottom of the section */}
+                      {nflTickets.map((t) => (
+                        <TicketCard key={t.id} ticket={t} games={games} sourcesMap={sourcesMap}
+                          toggleTicketStar={toggleTicketStar} toggleTicketPlaced={toggleTicketPlaced}
+                          deleteTicket={deleteTicket} />
+                      ))}
                     </div>
                     )}
                   </div>
@@ -1829,8 +1949,14 @@ export default function BetBoard() {
                   const sportPicks = picks
                     .filter((p) => p.sport === sport && !p.gameId)
                     .sort((a, b) => scorePick(b, sourcesMap, sport).edge - scorePick(a, sourcesMap, sport).edge);
-                  const hasSportContent = sportGames.length > 0 || sportPicks.length > 0;
+                  const sportTickets = ticketsForSport(sport);
+                  const hasSportContent = boardFilter === "picks"
+                    ? (picks.some((p) => p.sport === sport) || sportTickets.length > 0)
+                    : (sportGames.length > 0 || sportPicks.length > 0 || sportTickets.length > 0);
                   if (!hasSportContent) return null;
+                  const sportCount = (boardFilter === "picks"
+                    ? picks.filter((p) => p.sport === sport).length
+                    : sportGames.length) + sportTickets.length;
                   const sportCollapsed = collapsedSports.has(sport);
                   return (
                     <div key={sport}>
@@ -1839,7 +1965,7 @@ export default function BetBoard() {
                           className="flex items-center gap-1.5 -ml-1 p-1 rounded-lg active:bg-[#343746]">
                           {sportCollapsed ? <ChevronRight size={15} className="text-[#6272a4]" /> : <ChevronDown size={15} className="text-[#6272a4]" />}
                           <span className="text-xs uppercase tracking-wide text-[#6272a4] font-semibold">{sport}</span>
-                          {sportCollapsed && <span className="text-[10px] text-[#6272a4]">({sportGames.length + sportPicks.length})</span>}
+                          <span className="text-[10px] text-[#6272a4]">({sportCount})</span>
                         </button>
                         <button onClick={() => deleteSport(sport)} aria-label={`Delete all ${sport}`}
                           className="text-[#6272a4] active:text-[#ff5555] active:bg-[#343746] p-1.5 -m-1 rounded-lg">
@@ -1847,85 +1973,10 @@ export default function BetBoard() {
                         </button>
                       </div>
                       {!sportCollapsed && (
-                      <div className="space-y-3">
-                        {sportGames.map((game) => {
-                          const gamePicks = picks
-                            .filter((p) => p.gameId === game.id)
-                            .sort((a, b) => scorePick(b, sourcesMap, sport).edge - scorePick(a, sourcesMap, sport).edge);
-                          const gameCollapsed = collapsedGames.has(game.id);
-                          return (
-                            <div key={game.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
-                              <div className={`flex items-start justify-between gap-2 px-3 py-2.5 ${gameCollapsed ? "" : "border-b border-[#44475a]"}`}>
-                                <button onClick={() => toggleGameCollapsed(game.id)} aria-expanded={!gameCollapsed}
-                                  className="flex items-start gap-2 min-w-0 flex-1 text-left -ml-1 p-1 rounded-lg active:bg-[#282a36]">
-                                  {gameCollapsed ? <ChevronRight size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" /> : <ChevronDown size={16} className="text-[#6272a4] flex-shrink-0 mt-0.5" />}
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex items-center gap-1.5 min-w-0">
-                                      <span className="text-sm font-semibold text-[#f8f8f2] truncate min-w-0">{gameNames(game)}</span>
-                                      {gameCollapsed && gamePicks.length > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length})</span>}
-                                    </div>
-                                    {(gameOddsSummary(game) || game.gameTime) && (
-                                      <div className="flex items-center gap-2.5 mt-1 text-[11px] font-mono tabular-nums">
-                                        {gameOddsSummary(game) && <span className="text-[#8be9fd] font-medium tracking-tight">{gameOddsSummary(game)}</span>}
-                                        {gameOddsSummary(game) && game.gameTime && <span className="w-px h-3 bg-[#6272a4] flex-shrink-0" />}
-                                        {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
-                                      </div>
-                                    )}
-                                  </div>
-                                </button>
-                                <div className="flex items-center gap-0.5 flex-shrink-0 -mr-1">
-                                  <button onClick={() => {
-                                      setEditingGameId(game.id);
-                                      setEditingGameLabel(game.label);
-                                      setEditingGameTime(game.gameTime || "");
-                                    }}
-                                    aria-label="Edit game"
-                                    className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
-                                    <Pencil size={15} />
-                                  </button>
-                                  <button onClick={() => deleteGame(game.id)} aria-label="Delete game"
-                                    className="text-[#6272a4] active:text-[#ff5555] p-1.5 rounded-lg active:bg-[#282a36]">
-                                    <Trash2 size={15} />
-                                  </button>
-                                </div>
-                              </div>
-                              {editingGameId === game.id && (
-                                <div className="px-3 py-3 border-t border-[#44475a] bg-[#2d2f3b] rounded-b-lg space-y-2">
-                                  <input value={editingGameLabel} onChange={(e) => setEditingGameLabel(e.target.value)}
-                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
-                                    placeholder="Game label" />
-                                  <input value={editingGameTime} onChange={(e) => setEditingGameTime(e.target.value)}
-                                    className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2]"
-                                    placeholder="Game time (optional)" />
-                                  <div className="flex gap-2">
-                                    <button onClick={() => updateGame(game.id, editingGameLabel.trim() || game.label, editingGameTime.trim())}
-                                      className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold">
-                                      Save
-                                    </button>
-                                    <button onClick={() => setEditingGameId(null)}
-                                      className="flex-1 bg-[#21222c] border border-[#44475a] rounded-lg py-2 text-sm text-[#6272a4]">
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
-                              {!gameCollapsed && (gamePicks.length === 0 ? (
-                                <div className="px-3 py-2 text-xs text-[#6272a4]">No picks for this game yet.</div>
-                              ) : (
-                                <div className="divide-y divide-[#44475a]">
-                                  {gamePicks.map((pick) => (
-                                    <PickCard key={pick.id} pick={pick} sport={sport}
-                                      games={sportGames}
-                                      sources={sources} sourcesMap={sourcesMap}
-                                      expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                      toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
-                                      movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
-                                  ))}
-                                </div>
-                              ))}
-                            </div>
-                          );
-                        })}
+                      <div className="space-y-2">
+                        {sportGames
+                          .filter((g) => boardFilter === "all" || picks.some((p) => p.gameId === g.id) || legsForGame(g.id).length > 0)
+                          .map((game) => renderGameNode(game, sport))}
                         {sportPicks.length > 0 && (
                           <div className="bg-[#343746] border border-[#44475a] rounded-lg">
                             <div className="px-3 py-2 border-b border-[#44475a] text-xs text-[#6272a4]">No game assigned</div>
@@ -1941,6 +1992,12 @@ export default function BetBoard() {
                             </div>
                           </div>
                         )}
+                        {/* Single-sport parlays for this sport live at the bottom of the section */}
+                        {sportTickets.map((t) => (
+                          <TicketCard key={t.id} ticket={t} games={games} sourcesMap={sourcesMap}
+                            toggleTicketStar={toggleTicketStar} toggleTicketPlaced={toggleTicketPlaced}
+                            deleteTicket={deleteTicket} />
+                        ))}
                       </div>
                       )}
                     </div>
@@ -2002,26 +2059,35 @@ export default function BetBoard() {
             {selectedSport && (
               <div>
                 <label className="text-xs uppercase tracking-wide text-[#6272a4]">Game</label>
-                <div className="mt-1 flex flex-wrap gap-2">
-                  {[...games].filter((g) => g.sport === selectedSport)
-                    .sort((a, b) => (a.gameTime || "").localeCompare(b.gameTime || ""))
-                    .map((g) => (
-                      <button key={g.id}
-                        onClick={() => setSelectedGameId(selectedGameId === g.id ? null : g.id)}
-                        className={`px-3.5 py-2 rounded-lg text-sm border active:scale-95 transition-transform ${
-                          selectedGameId === g.id
-                            ? "bg-[#bd93f9]/15 border-[#bd93f9]/60 text-[#bd93f9]"
-                            : "bg-[#343746] border-[#44475a] text-[#6272a4]"
-                        }`}>
-                        {g.label}{g.gameTime ? ` · ${g.gameTime}` : ""}
-                      </button>
-                    ))}
-                  <button
-                    onClick={() => setNewGameLabel(newGameLabel === null ? "" : null)}
-                    className="px-3.5 py-2 rounded-lg text-sm border border-dashed border-[#6272a4] text-[#6272a4] active:scale-95 transition-transform">
-                    + Game
-                  </button>
-                </div>
+                {(() => {
+                  const gamesForSport = [...games].filter((g) => g.sport === selectedSport)
+                    .sort((a, b) => (a.gameTime || "").localeCompare(b.gameTime || ""));
+                  return (
+                    <div className="mt-1 rounded-lg border border-[#44475a] overflow-hidden">
+                      <div className="max-h-[15rem] overflow-y-auto divide-y divide-[#44475a]">
+                        {gamesForSport.length === 0 ? (
+                          <div className="px-3 py-3 text-sm text-[#6272a4]">No games yet. Import from the buttons above or add one below.</div>
+                        ) : gamesForSport.map((g) => {
+                          const selected = selectedGameId === g.id;
+                          return (
+                            <button key={g.id} aria-pressed={selected}
+                              onClick={() => setSelectedGameId(selected ? null : g.id)}
+                              className={`w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm active:bg-[#282a36] ${selected ? "bg-[#bd93f9]/15 text-[#bd93f9]" : "text-[#f8f8f2]"}`}>
+                              <Check size={15} className={`flex-shrink-0 ${selected ? "text-[#bd93f9]" : "text-transparent"}`} />
+                              <span className="min-w-0 flex-1 truncate">{g.label}</span>
+                              {g.gameTime && <span className="text-[11px] font-mono tabular-nums text-[#8b93b8] flex-shrink-0">{g.gameTime}</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })()}
+                <button
+                  onClick={() => setNewGameLabel(newGameLabel === null ? "" : null)}
+                  className="mt-2 inline-flex items-center px-3.5 py-2 rounded-lg text-sm border border-dashed border-[#6272a4] text-[#6272a4] active:scale-95 transition-transform">
+                  + Add game
+                </button>
 
                 {newGameLabel !== null && (
                   <div className="mt-2 bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
