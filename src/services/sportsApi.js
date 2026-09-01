@@ -1,22 +1,18 @@
 const ESPN_BASE = "https://site.api.espn.com/apis/site/v2/sports";
 
-// ESPN sport/league path segments
+// ESPN sport/league path segments. Keys match the app's LEAGUES values exactly.
+// "Other" has no endpoint — it's manual-only.
 const SPORT_ENDPOINT = {
-  NFL:   "football/nfl",
-  MLB:   "baseball/mlb",
-  NBA:   "basketball/nba",
-  NHL:   "hockey/nhl",
-  NCAAF: "football/college-football",
-  NCAAB: "basketball/mens-college-basketball",
-  Golf:  "golf/pga",
-  // Soccer is multi-league — see SOCCER_ENDPOINTS below
+  NFL:                "football/nfl",
+  NCAAF:              "football/college-football",
+  NCAAB:              "basketball/mens-college-basketball",
+  NHL:                "hockey/nhl",
+  NBA:                "basketball/nba",
+  MLS:                "soccer/usa.1",
+  EPL:                "soccer/eng.1",
+  "Champions League": "soccer/uefa.champions",
+  MLB:                "baseball/mlb",
 };
-
-// Fetched in parallel and merged for the Soccer sport
-const SOCCER_ENDPOINTS = [
-  "soccer/usa.1",      // MLS
-  "soccer/fifa.world", // FIFA World Cup
-];
 
 async function fetchJson(url) {
   const res = await fetch(url);
@@ -75,22 +71,9 @@ export function parseEspnEvent(event) {
 // Returns raw ESPN events for a sport on a given local date (YYYY-MM-DD).
 // ESPN's dates= param buckets by venue local date, so no dual-fetch needed.
 export async function getEventsByDate(sport, dateISO) {
-  const espnDate = toEspnDate(dateISO);
-
-  if (sport === "Soccer") {
-    const results = await Promise.all(
-      SOCCER_ENDPOINTS.map((path) =>
-        fetchJson(`${ESPN_BASE}/${path}/scoreboard?dates=${espnDate}`)
-          .then((d) => d.events || [])
-          .catch(() => [])
-      )
-    );
-    return results.flat();
-  }
-
   const endpoint = SPORT_ENDPOINT[sport];
   if (!endpoint) return [];
-  const data = await fetchJson(`${ESPN_BASE}/${endpoint}/scoreboard?dates=${espnDate}`);
+  const data = await fetchJson(`${ESPN_BASE}/${endpoint}/scoreboard?dates=${toEspnDate(dateISO)}`);
   return data.events || [];
 }
 
@@ -100,4 +83,11 @@ export async function getNflWeekEvents() {
   return data.events || [];
 }
 
-export default { getEventsByDate, getNflWeekEvents, parseEspnEvent };
+// Returns the current college-football week's Top-25 slate (ESPN's default
+// scoreboard). Mirrors the NFL week behavior; add any other games manually.
+export async function getCfbWeekEvents() {
+  const data = await fetchJson(`${ESPN_BASE}/football/college-football/scoreboard`);
+  return data.events || [];
+}
+
+export default { getEventsByDate, getNflWeekEvents, getCfbWeekEvents, parseEspnEvent };

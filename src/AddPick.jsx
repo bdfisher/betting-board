@@ -1,6 +1,10 @@
 import React, { useState } from "react";
 import sportsApi, { parseEspnEvent } from "./services/sportsApi";
 
+// Sports imported a full week at a time (ESPN returns the active week) rather than
+// by single date.
+const WEEK_SPORTS = new Set(["NFL", "NCAAF"]);
+
 // Returns YYYY-MM-DD in America/Chicago for any Date
 function getCentralDateISO(date) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(date);
@@ -133,15 +137,15 @@ export default function AddPickAutofill({ selectedSport, onImportGames }) {
     }
   }
 
-  async function fetchNflWeek() {
+  async function fetchWeek(sport) {
     setError(null); setLoading(true); setFetchMode("week");
     try {
-      const cacheKey = "NFL:currentWeek";
+      const cacheKey = `${sport}:currentWeek`;
       const cached = cacheGet(cacheKey);
       if (cached) { loadGames(cached.games); setLoading(false); return; }
 
-      const raw    = await sportsApi.getNflWeekEvents();
-      const mapped = raw.map((e) => mapEspnEventToGame(e, "NFL"));
+      const raw    = sport === "NFL" ? await sportsApi.getNflWeekEvents() : await sportsApi.getCfbWeekEvents();
+      const mapped = raw.map((e) => mapEspnEventToGame(e, sport));
       loadGames(mapped);
       cacheSet(cacheKey, { fetchedAt: new Date().toISOString(), games: mapped });
     } catch (e) {
@@ -167,9 +171,9 @@ export default function AddPickAutofill({ selectedSport, onImportGames }) {
   return (
     <div className="mt-3">
       <div className="flex items-center gap-2 flex-wrap">
-        {selectedSport === "NFL" ? (
-          <button onClick={fetchNflWeek} className="px-3 py-2 rounded-lg text-sm bg-[#44475a] text-[#f8f8f2]">
-            {loading ? "Loading…" : "Autofill NFL week"}
+        {WEEK_SPORTS.has(selectedSport) ? (
+          <button onClick={() => fetchWeek(selectedSport)} className="px-3 py-2 rounded-lg text-sm bg-[#44475a] text-[#f8f8f2]">
+            {loading ? "Loading…" : `Autofill ${selectedSport} week`}
           </button>
         ) : (
           <>

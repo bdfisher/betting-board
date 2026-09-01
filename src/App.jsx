@@ -22,7 +22,7 @@ import {
 import AddPickAutofill from "./AddPick";
 import sportsApi, { parseEspnEvent } from "./services/sportsApi";
 
-const LEAGUES = ["NFL", "NBA", "NHL", "MLB", "NCAAF", "NCAAB", "Golf", "Soccer", "Other"];
+const LEAGUES = ["NFL", "NCAAF", "NCAAB", "NHL", "NBA", "MLS", "EPL", "Champions League", "MLB", "Other"];
 
 const NFL_TEAMS = [
   "Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens", "Buffalo Bills",
@@ -1831,17 +1831,20 @@ export default function BetBoard() {
   const shellWidth = activeTab === "promos" ? "max-w-2xl" : "max-w-md";
 
   return (
-    <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
-      <div className={`px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] ${shellWidth} mx-auto flex items-baseline justify-between gap-2`}>
-        <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">The Notebook</h1>
-        <button onClick={refreshOdds} disabled={refreshingOdds}
-          className="flex items-center gap-1.5 text-xs text-[#6272a4] active:text-[#bd93f9] flex-shrink-0 disabled:opacity-50 self-center">
-          <RefreshCw size={13} className={refreshingOdds ? "animate-spin" : ""} />
-          {refreshingOdds ? "Refreshing…" : "Refresh lines"}
-        </button>
-      </div>
+    <div className="h-screen [height:100dvh] flex flex-col overflow-hidden bg-[#282a36] text-[#f8f8f2]">
+      <header className="flex-shrink-0 border-b border-[#44475a]">
+        <div className={`${shellWidth} mx-auto px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 flex items-baseline justify-between gap-2`}>
+          <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">The Notebook</h1>
+          <button onClick={refreshOdds} disabled={refreshingOdds}
+            className="flex items-center gap-1.5 text-xs text-[#6272a4] active:text-[#bd93f9] flex-shrink-0 disabled:opacity-50 self-center">
+            <RefreshCw size={13} className={refreshingOdds ? "animate-spin" : ""} />
+            {refreshingOdds ? "Refreshing…" : "Refresh lines"}
+          </button>
+        </div>
+      </header>
 
-      <div className={`${shellWidth} mx-auto px-4 pt-4`}>
+      <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+        <div className={`${shellWidth} mx-auto px-4 pt-4 pb-6`}>
         {activeTab === "board" && (
           <div className="space-y-4">
             {picks.length === 0 && games.length === 0 && tickets.length === 0 ? (
@@ -2570,7 +2573,8 @@ export default function BetBoard() {
             )}
           </div>
         )}
-      </div>
+        </div>
+      </main>
 
       {/* Confirm dialog */}
       {confirmDialog && (
@@ -2693,7 +2697,7 @@ export default function BetBoard() {
         </div>
       )}
 
-      <div className={`fixed bottom-0 inset-x-0 bg-[#343746] border-t border-[#44475a] pb-safe transition-transform duration-150 ${keyboardOpen ? "translate-y-full" : "translate-y-0"}`}>
+      <div className={`flex-shrink-0 bg-[#343746] border-t border-[#44475a] pb-safe transition-transform duration-150 ${keyboardOpen ? "translate-y-full" : "translate-y-0"}`}>
         <div className="max-w-md mx-auto flex">
           {[
             { key: "board", label: "Board", Icon: ClipboardList },
