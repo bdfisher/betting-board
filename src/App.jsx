@@ -166,6 +166,11 @@ function gameWhen(game) {
   return d && t ? `${d} · ${t}` : d || t;
 }
 
+// Today's date as "YYYY-MM-DD" in Central time (matches how autofill stores dates).
+function todayCentralISO() {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
+}
+
 function findNflTeam(input) {
   const norm = input.trim().toLowerCase();
   if (!norm) return null;
@@ -887,6 +892,7 @@ export default function BetBoard() {
   const [selectedSport, setSelectedSport] = useState(null);
   const [selectedGameId, setSelectedGameId] = useState(null);
   const [newGameLabel, setNewGameLabel] = useState(null);
+  const [newGameDate, setNewGameDate] = useState(todayCentralISO());
   const [newGameHHMM, setNewGameHHMM] = useState("");
   const [newGameAmPm, setNewGameAmPm] = useState("PM");
   const [editingGameId, setEditingGameId] = useState(null);
@@ -1230,12 +1236,13 @@ export default function BetBoard() {
     const label = newGameLabel.trim();
     if (!label) return;
     const gameTime = newGameHHMM.trim() ? `${newGameHHMM.trim()} ${newGameAmPm}` : "";
-    const game = { id: uid(), label, sport: selectedSport, gameTime, createdAt: new Date().toISOString() };
+    const game = { id: uid(), label, sport: selectedSport, date: newGameDate || "", gameTime, createdAt: new Date().toISOString() };
     const nextGames = [...games, game];
     setGames(nextGames);
     persistBoard(nextGames, picks);
     setSelectedGameId(game.id);
     setNewGameLabel(null);
+    setNewGameDate(todayCentralISO());
     setNewGameHHMM("");
     setNewGameAmPm("PM");
   }
@@ -1865,20 +1872,17 @@ export default function BetBoard() {
   const shellWidth = activeTab === "promos" ? "max-w-2xl" : "max-w-md";
 
   return (
-    <div className="h-screen [height:100dvh] flex flex-col overflow-hidden bg-[#282a36] text-[#f8f8f2]">
-      <header className="flex-shrink-0 border-b border-[#44475a]">
-        <div className={`${shellWidth} mx-auto px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 flex items-baseline justify-between gap-2`}>
-          <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">The Notebook</h1>
-          <button onClick={refreshOdds} disabled={refreshingOdds}
-            className="flex items-center gap-1.5 text-xs text-[#6272a4] active:text-[#bd93f9] flex-shrink-0 disabled:opacity-50 self-center">
-            <RefreshCw size={13} className={refreshingOdds ? "animate-spin" : ""} />
-            {refreshingOdds ? "Refreshing…" : "Refresh lines"}
-          </button>
-        </div>
-      </header>
+    <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
+      <div className={`px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] ${shellWidth} mx-auto flex items-baseline justify-between gap-2`}>
+        <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">The Notebook</h1>
+        <button onClick={refreshOdds} disabled={refreshingOdds}
+          className="flex items-center gap-1.5 text-xs text-[#6272a4] active:text-[#bd93f9] flex-shrink-0 disabled:opacity-50 self-center">
+          <RefreshCw size={13} className={refreshingOdds ? "animate-spin" : ""} />
+          {refreshingOdds ? "Refreshing…" : "Refresh lines"}
+        </button>
+      </div>
 
-      <main className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-        <div className={`${shellWidth} mx-auto px-4 pt-4 pb-6`}>
+      <div className={`${shellWidth} mx-auto px-4 pt-4`}>
         {activeTab === "board" && (
           <div className="space-y-4">
             {picks.length === 0 && games.length === 0 && tickets.length === 0 ? (
@@ -2135,9 +2139,11 @@ export default function BetBoard() {
                       className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]"
                       autoFocus />
                     <div className="flex gap-2">
+                      <input type="date" value={newGameDate} onChange={(e) => setNewGameDate(e.target.value)}
+                        className="flex-1 min-w-0 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2] [color-scheme:dark]" />
                       <input type="text" value={newGameHHMM} onChange={(e) => setNewGameHHMM(e.target.value)}
                         placeholder="7:30"
-                        className="flex-1 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
+                        className="w-20 flex-shrink-0 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
                       <div className="flex rounded-lg overflow-hidden border border-[#44475a] flex-shrink-0">
                         {["AM", "PM"].map((v) => (
                           <button key={v} type="button" onClick={() => setNewGameAmPm(v)}
@@ -2153,7 +2159,7 @@ export default function BetBoard() {
                         className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold disabled:bg-[#21222c] disabled:text-[#44475a]">
                         Add game
                       </button>
-                      <button onClick={() => { setNewGameLabel(null); setNewGameHHMM(""); setNewGameAmPm("PM"); }}
+                      <button onClick={() => { setNewGameLabel(null); setNewGameDate(todayCentralISO()); setNewGameHHMM(""); setNewGameAmPm("PM"); }}
                         className="px-4 py-2 rounded-lg text-sm bg-[#21222c] text-[#6272a4]">
                         Cancel
                       </button>
@@ -2608,8 +2614,7 @@ export default function BetBoard() {
             )}
           </div>
         )}
-        </div>
-      </main>
+      </div>
 
       {/* Confirm dialog */}
       {confirmDialog && (
@@ -2732,7 +2737,7 @@ export default function BetBoard() {
         </div>
       )}
 
-      <div className={`flex-shrink-0 bg-[#343746] border-t border-[#44475a] pb-safe transition-transform duration-150 ${keyboardOpen ? "translate-y-full" : "translate-y-0"}`}>
+      <div className={`fixed bottom-0 inset-x-0 bg-[#343746] border-t border-[#44475a] pb-safe transition-transform duration-150 ${keyboardOpen ? "translate-y-full" : "translate-y-0"}`}>
         <div className="max-w-md mx-auto flex">
           {[
             { key: "board", label: "Board", Icon: ClipboardList },
