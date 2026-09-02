@@ -132,6 +132,40 @@ function gameOddsSummary(game) {
   return o.awayML || o.homeML || "";
 }
 
+// Parse a display time like "7:30 PM" to minutes since midnight for sorting.
+function timeToMinutes(t) {
+  const m = /(\d{1,2}):(\d{2})\s*([AaPp][Mm])?/.exec(t || "");
+  if (!m) return 9999;
+  let h = parseInt(m[1], 10);
+  const ap = (m[3] || "").toUpperCase();
+  if (ap === "PM" && h !== 12) h += 12;
+  if (ap === "AM" && h === 12) h = 0;
+  return h * 60 + parseInt(m[2], 10);
+}
+
+// Chronological sort: by date, then kickoff time. Undated (manual) games sort last.
+function byGameDateTime(a, b) {
+  const da = a.date || "9999-99-99";
+  const db = b.date || "9999-99-99";
+  if (da !== db) return da < db ? -1 : 1;
+  return timeToMinutes(a.gameTime) - timeToMinutes(b.gameTime);
+}
+
+// "Sun 9/7" from a "YYYY-MM-DD" date (parsed as local to avoid a UTC day shift).
+function fmtGameDate(dateISO) {
+  const [y, m, d] = (dateISO || "").split("-").map(Number);
+  if (!y || !m || !d) return "";
+  const wd = new Date(y, m - 1, d).toLocaleDateString("en-US", { weekday: "short" });
+  return `${wd} ${m}/${d}`;
+}
+
+// Combined "Sun 9/7 · 7:30 PM" for schedule display; either part may be absent.
+function gameWhen(game) {
+  const d = fmtGameDate(game.date);
+  const t = game.gameTime || "";
+  return d && t ? `${d} · ${t}` : d || t;
+}
+
 function findNflTeam(input) {
   const norm = input.trim().toLowerCase();
   if (!norm) return null;
@@ -475,7 +509,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                 >
                   <option value="">No game assigned</option>
                   {games.map((game) => (
-                    <option key={game.id} value={game.id}>{game.label}{game.gameTime ? ` · ${game.gameTime}` : ""}</option>
+                    <option key={game.id} value={game.id}>{game.label}{gameWhen(game) ? ` · ${gameWhen(game)}` : ""}</option>
                   ))}
                 </select>
               ) : (
@@ -1758,7 +1792,7 @@ export default function BetBoard() {
             <span className="text-[13px] font-medium text-[#e8e9f0] truncate min-w-0 flex-1">{gameNames(game)}</span>
             <div className="flex items-center gap-2 flex-shrink-0 text-[11px] font-mono tabular-nums">
               {gameOddsSummary(game) && <span className="text-[#8be9fd] tracking-tight">{gameOddsSummary(game)}</span>}
-              {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
+              {gameWhen(game) && <span className="text-[#8b93b8]">{gameWhen(game)}</span>}
               <div className="flex items-center gap-0.5 -mr-1">
                 <button onClick={() => { setEditingGameId(game.id); setEditingGameLabel(game.label); setEditingGameTime(game.gameTime || ""); }}
                   aria-label="Edit game" className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
@@ -1788,11 +1822,11 @@ export default function BetBoard() {
                 <span className="text-sm font-semibold text-[#f8f8f2] truncate min-w-0">{gameNames(game)}</span>
                 {gameCollapsed && (gamePicks.length + gameLegs.length) > 0 && <span className="text-[10px] text-[#6272a4] flex-shrink-0">({gamePicks.length + gameLegs.length})</span>}
               </div>
-              {(gameOddsSummary(game) || game.gameTime) && (
+              {(gameOddsSummary(game) || gameWhen(game)) && (
                 <div className="flex items-center gap-2.5 mt-1 text-[11px] font-mono tabular-nums">
                   {gameOddsSummary(game) && <span className="text-[#8be9fd] font-medium tracking-tight">{gameOddsSummary(game)}</span>}
-                  {gameOddsSummary(game) && game.gameTime && <span className="w-px h-3 bg-[#6272a4] flex-shrink-0" />}
-                  {game.gameTime && <span className="text-[#8b93b8]">{game.gameTime}</span>}
+                  {gameOddsSummary(game) && gameWhen(game) && <span className="w-px h-3 bg-[#6272a4] flex-shrink-0" />}
+                  {gameWhen(game) && <span className="text-[#8b93b8]">{gameWhen(game)}</span>}
                 </div>
               )}
             </div>
@@ -1916,7 +1950,7 @@ export default function BetBoard() {
                     <div className="space-y-2">
                       {games.filter((g) => g.sport === "NFL")
                         .filter((g) => boardFilter === "all" || picks.some((p) => p.gameId === g.id) || legsForGame(g.id).length > 0)
-                        .sort((a, b) => (a.gameTime || "zzz").localeCompare(b.gameTime || "zzz"))
+                        .sort(byGameDateTime)
                         .map((game) => renderGameNode(game, "NFL"))}
                       {/* Orphan NFL picks (no game assigned) */}
                       {picks.filter((p) => p.sport === "NFL" && !p.gameId).length > 0 && (
@@ -1979,6 +2013,7 @@ export default function BetBoard() {
                       <div className="space-y-2">
                         {sportGames
                           .filter((g) => boardFilter === "all" || picks.some((p) => p.gameId === g.id) || legsForGame(g.id).length > 0)
+                          .sort(byGameDateTime)
                           .map((game) => renderGameNode(game, sport))}
                         {sportPicks.length > 0 && (
                           <div className="bg-[#343746] border border-[#44475a] rounded-lg">
@@ -2064,7 +2099,7 @@ export default function BetBoard() {
                 <label className="text-xs uppercase tracking-wide text-[#6272a4]">Game</label>
                 {(() => {
                   const gamesForSport = [...games].filter((g) => g.sport === selectedSport)
-                    .sort((a, b) => (a.gameTime || "").localeCompare(b.gameTime || ""));
+                    .sort(byGameDateTime);
                   return (
                     <div className="mt-1 rounded-lg border border-[#44475a] overflow-hidden">
                       <div className="max-h-[15rem] overflow-y-auto divide-y divide-[#44475a]">
@@ -2078,7 +2113,7 @@ export default function BetBoard() {
                               className={`w-full flex items-center gap-2 px-3 py-2.5 text-left text-sm active:bg-[#282a36] ${selected ? "bg-[#bd93f9]/15 text-[#bd93f9]" : "text-[#f8f8f2]"}`}>
                               <Check size={15} className={`flex-shrink-0 ${selected ? "text-[#bd93f9]" : "text-transparent"}`} />
                               <span className="min-w-0 flex-1 truncate">{g.label}</span>
-                              {g.gameTime && <span className="text-[11px] font-mono tabular-nums text-[#8b93b8] flex-shrink-0">{g.gameTime}</span>}
+                              {gameWhen(g) && <span className="text-[11px] font-mono tabular-nums text-[#8b93b8] flex-shrink-0">{gameWhen(g)}</span>}
                             </button>
                           );
                         })}
