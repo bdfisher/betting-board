@@ -63,6 +63,13 @@ const DECISIONS = [
 ];
 const DECISION = Object.fromEntries(DECISIONS.map((d) => [d.key, d]));
 
+// Board filter segments. "all"/"picks" keep the sport → game tree; "top"/"sources"
+// flatten every sport into one ranked list to cut the noise on a big slate.
+const BOARD_FILTERS = [["all", "All"], ["picks", "Picks"], ["top", "Top"], ["sources", "Sources"]];
+const isFlatFilter = (f) => f === "top" || f === "sources";
+// A pick needs at least this many agreeing sources to count as consensus.
+const CONSENSUS_MIN_SOURCES = 2;
+
 function scorePick(pick, sourcesMap, sport) {
   const pickSrcDetails = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
   // Sort source edges strongest-first, then sum with diminishing returns so each
@@ -908,10 +915,14 @@ export default function BetBoard() {
   const [expandedPickId, setExpandedPickId] = useState(null);
   const [collapsedSports, setCollapsedSports] = useState(new Set());
   const [collapsedGames, setCollapsedGames] = useState(new Set());
-  // Board view filter: "all" shows every imported game (empty ones as dense one-line
-  // rows), "picks" shows only games you've logged a pick on. Persisted across reloads.
+  // Board view filter. "all" shows every imported game (empty ones as dense one-line
+  // rows), "picks" shows only games you've logged a pick on. "top" and "sources" drop
+  // the sport/game grouping entirely for a flat ranked list. Persisted across reloads.
   const [boardFilter, setBoardFilter] = useState(() => {
-    try { return localStorage.getItem("betboard:boardFilter") || "all"; } catch { return "all"; }
+    try {
+      const v = localStorage.getItem("betboard:boardFilter");
+      return BOARD_FILTERS.some(([k]) => k === v) ? v : "all";
+    } catch { return "all"; }
   });
   function changeBoardFilter(v) {
     setBoardFilter(v);
@@ -1725,6 +1736,61 @@ export default function BetBoard() {
   };
   const topTickets = tickets.filter((t) => parlaySport(t) === null);
   const ticketsForSport = (sport) => tickets.filter((t) => parlaySport(t) === sport);
+
+  // ── Flat filters ──────────────────────────────────────────────────────────
+  // Every pick across every sport, scored, ranked, and stripped of the sport/game
+  // tree. "top" = anything the model would actually size (0.5u and up), best edge
+  // first. "sources" = consensus plays, most agreeing cappers first. Parlays are
+  // left out of both: they carry no sizing and no per-pick consensus.
+  function flatBoardPicks(mode) {
+    const scored = picks.map((p) => ({ pick: p, score: scorePick(p, sourcesMap, p.sport) }));
+    if (mode === "sources") {
+      return scored
+        .filter(({ score }) => score.srcCount >= CONSENSUS_MIN_SOURCES)
+        .sort((a, b) => b.score.srcCount - a.score.srcCount || b.score.edge - a.score.edge);
+    }
+    return scored
+      .filter(({ score }) => scoreToDecision(score.edge).units > 0)
+      .sort((a, b) => b.score.edge - a.score.edge || b.score.srcCount - a.score.srcCount);
+  }
+
+  // The context the game header used to carry — "NFL · Chiefs @ Ravens · Sun 9/7 · 7:30 PM".
+  function flatPickContext(pick) {
+    const game = games.find((g) => g.id === pick.gameId);
+    return [pick.sport, game && gameNames(game), game && gameWhen(game)].filter(Boolean).join(" · ");
+  }
+
+  const renderFlatPicks = (mode) => {
+    const rows = flatBoardPicks(mode);
+    if (rows.length === 0) {
+      return (
+        <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
+          {mode === "sources"
+            ? `No picks with ${CONSENSUS_MIN_SOURCES}+ sources yet.`
+            : "No picks above a pass yet."}{" "}
+          Switch to{" "}
+          <button onClick={() => changeBoardFilter("all")} className="text-[#bd93f9] underline">All</button>{" "}
+          to see your slate.
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-2">
+        {rows.map(({ pick }) => (
+          <div key={pick.id} className="bg-[#343746] border border-[#44475a] rounded-lg">
+            <div className="px-3 pt-2 text-[10px] text-[#6272a4] font-mono tabular-nums truncate">
+              {flatPickContext(pick)}
+            </div>
+            <PickCard pick={pick} sport={pick.sport} games={games.filter((g) => g.sport === pick.sport)}
+              sources={sources} sourcesMap={sourcesMap}
+              expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
+              toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
+              movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
+          </div>
+        ))}
+      </div>
+    );
+  };
   // Every leg with an assigned game is echoed under that game as a "Parlay Leg" row.
   const legsForGame = (gameId) =>
     tickets.flatMap((t) => (t.legs || [])
@@ -1892,10 +1958,10 @@ export default function BetBoard() {
               </div>
             ) : (
               <>
-                {/* ── Picks / All filter — pinned so it stays reachable while scrolling a long slate ── */}
+                {/* ── Board filter — pinned so it stays reachable while scrolling a long slate ── */}
                 <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-[#282a36]">
                   <div className="flex rounded-lg border border-[#44475a] text-xs overflow-hidden w-max">
-                    {[["all", "All"], ["picks", "Picks"]].map(([v, l]) => (
+                    {BOARD_FILTERS.map(([v, l]) => (
                       <button key={v} onClick={() => changeBoardFilter(v)} aria-pressed={boardFilter === v}
                         className={`px-3 py-1.5 ${boardFilter === v ? "bg-[#bd93f9] text-[#282a36] font-semibold" : "bg-[#343746] text-[#6272a4]"}`}>
                         {l}
@@ -1904,6 +1970,8 @@ export default function BetBoard() {
                   </div>
                 </div>
 
+                {isFlatFilter(boardFilter) ? renderFlatPicks(boardFilter) : (
+                <>
                 {boardFilter === "picks" && picks.length === 0 && tickets.length === 0 && (
                   <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
                     No picks logged yet. Switch to{" "}
@@ -2045,6 +2113,8 @@ export default function BetBoard() {
                     </div>
                   );
                 })}
+                </>
+                )}
               </>
             )}
           </div>
