@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { storage } from "./storage";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
 import {
@@ -18,6 +18,7 @@ import {
   HelpCircle,
   Tag,
   RefreshCw,
+  StickyNote,
 } from "lucide-react";
 import AddPickAutofill from "./AddPick";
 import sportsApi, { parseEspnEvent } from "./services/sportsApi";
@@ -50,6 +51,26 @@ const TIER_BADGE_CLASS = {
 const TIER_EDGE = { A: 10, B: 4.5, C: 1.5 };
 const STAR_EDGE = 4;        // flat bump for your own conviction
 const SOURCE_DECAY = 0.6;   // each additional agreeing source counts 60% of the previous
+// How hard a source is banging the table on this particular play. Scales that one
+// source's tier edge, so the same capper can be a lean on one pick and their play
+// of the day on another. Absent strength = a normal play (×1).
+// 0.75 is deliberate: a lone A-source lean lands on exactly 7.5 edge = 0.5u, so a
+// sharp's soft call still gets a small bet rather than falling off to a pass.
+const STRENGTH_MULT = { lean: 0.75, potd: 1.4 };
+const STRENGTHS = [
+  { key: "lean",   label: "Lean", cls: "text-[#ffb86c] bg-[#ffb86c]/10 border-[#ffb86c]/40" },
+  { key: "normal", label: "Play", cls: "text-[#6272a4] bg-transparent border-[#44475a]" },
+  { key: "potd",   label: "POTD", cls: "text-[#ff79c6] bg-[#ff79c6]/15 border-[#ff79c6]/50" },
+];
+const STRENGTH = Object.fromEntries(STRENGTHS.map((s) => [s.key, s]));
+// Stored as undefined for a normal play, so existing picks need no migration.
+const strengthKey = (entry) => (entry?.strength && STRENGTH_MULT[entry.strength] ? entry.strength : "normal");
+const nextStrength = (key) => STRENGTHS[(STRENGTHS.findIndex((s) => s.key === key) + 1) % STRENGTHS.length].key;
+// The edge one source contributes before consensus decay is applied.
+function entryEdge(entry, src, sport) {
+  const base = TIER_EDGE[getSourceTier(src, sport)] || 0;
+  return base * (STRENGTH_MULT[entry?.strength] || 1);
+}
 // Ladder rungs are one correlated thesis: the anchor rung gets a normal edge-based
 // size, and each step up the ladder is scaled down (each rung 55% of the previous)
 // since it's progressively less likely to hit.
@@ -70,26 +91,35 @@ const isFlatFilter = (f) => f === "top" || f === "sources";
 // A pick needs at least this many agreeing sources to count as consensus.
 const CONSENSUS_MIN_SOURCES = 2;
 
+// Pairs each stored source entry with its source record, dropping entries whose
+// source has since been deleted. Keeps the entry so its strength stays attached.
+function resolveEntries(list, sourcesMap) {
+  return (list || [])
+    .map((entry) => ({ entry, src: sourcesMap[entry.sourceId] }))
+    .filter(({ src }) => Boolean(src));
+}
+
+// Sum the source edges strongest-first with diminishing returns, so each additional
+// agreeing capper contributes SOURCE_DECAY^n of its (strength-adjusted) tier edge.
+function consensusEdge(resolved, sport) {
+  return resolved
+    .map(({ entry, src }) => entryEdge(entry, src, sport))
+    .sort((a, b) => b - a)
+    .reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
+}
+
 function scorePick(pick, sourcesMap, sport) {
-  const pickSrcDetails = (pick.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
-  // Sort source edges strongest-first, then sum with diminishing returns so each
-  // additional agreeing capper contributes SOURCE_DECAY^n of its tier edge.
-  const sortedEdges = pickSrcDetails
-    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
-    .sort((a, b) => b - a);
-  const sourceEdge = sortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
-  const aCount = pickSrcDetails.filter((src) => getSourceTier(src, sport) === "A").length;
+  const resolved = resolveEntries(pick.sources, sourcesMap);
+  const sourceEdge = consensusEdge(resolved, sport);
+  const aCount = resolved.filter(({ src }) => getSourceTier(src, sport) === "A").length;
+  const potdCount = resolved.filter(({ entry }) => strengthKey(entry) === "potd").length;
   const starEdge = pick.star ? STAR_EDGE : 0;
   const edge = sourceEdge + starEdge;
-  return { edge, sourceEdge, starEdge, aCount, srcCount: pickSrcDetails.length };
+  return { edge, sourceEdge, starEdge, aCount, potdCount, srcCount: resolved.length };
 }
 
 function scoreRung(rung, sourcesMap, sport) {
-  const srcDetails = (rung.sources || []).map((ps) => sourcesMap[ps.sourceId]).filter(Boolean);
-  const sortedEdges = srcDetails
-    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
-    .sort((a, b) => b - a);
-  const sourceEdge = sortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
+  const sourceEdge = consensusEdge(resolveEntries(rung.sources, sourcesMap), sport);
   return sourceEdge + (rung.star ? STAR_EDGE : 0);
 }
 
@@ -279,7 +309,7 @@ function lineWithinTolerance(line1, line2, market) {
   return Math.abs(Number(line1) - Number(line2)) <= tol;
 }
 
-function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources, movePickToGame, updatePickRungs, updatePickLabel }) {
+function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId, setExpandedPickId, toggleStar, togglePlaced, deletePick, updatePickSources, cycleSourceStrength, movePickToGame, updatePickRungs, updatePickLabel }) {
   const expanded = expandedPickId === pick.id;
   const score = scorePick(pick, sourcesMap, sport);
   const decision = scoreToDecision(score.edge);
@@ -351,8 +381,9 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
     const srcPart = pickSources.length === 0 ? "no sources"
       : pickSources.length === 1 ? `${pickSources[0].name} (${TIER_NAMES[getSourceTier(pickSources[0], sport)]})`
       : `${pickSources.length} sources agree`;
+    const potdPart = score.potdCount > 0 ? `, ${score.potdCount === 1 ? "a POTD" : `${score.potdCount} POTDs`}` : "";
     const starPart = pick.star ? ", personal star" : "";
-    const reason = srcPart + starPart;
+    const reason = srcPart + potdPart + starPart;
     if (decision.key === "pass") return `Pass — not enough signal (${reason})`;
     if (decision.key === "small") return `Small (0.5u) — building consensus (${reason})`;
     if (decision.key === "standard") return `Standard (1u) — solid signal (${reason})`;
@@ -365,13 +396,12 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
     ? (rungModal.rungId ? rungs.findIndex((r) => r.id === rungModal.rungId) : rungs.length)
     : 0;
   const _maxFromAnchor = anchorUnits * Math.pow(LADDER_RUNG_DECAY, _rungIdx + 1);
+  // Rungs carry plain source entries — strength is set on the anchor pick's sources.
   const _modalSrcDetails = rungModal
     ? [...rungModal.sourceIds].map((id) => sourcesMap[id]).filter(Boolean)
     : [];
-  const _modalSortedEdges = _modalSrcDetails
-    .map((src) => TIER_EDGE[getSourceTier(src, sport)] || 0)
-    .sort((a, b) => b - a);
-  const _modalSourceEdge = _modalSortedEdges.reduce((sum, e, i) => sum + e * Math.pow(SOURCE_DECAY, i), 0);
+  const _modalSourceEdge = consensusEdge(
+    _modalSrcDetails.map((src) => ({ entry: null, src })), sport);
   const _modalStarEdge = rungModal?.star ? STAR_EDGE : 0;
   const _modalTotalEdge = _modalSourceEdge + _modalStarEdge;
   const _modalHasSig = !!(rungModal && (rungModal.sourceIds.size > 0 || rungModal.star));
@@ -412,6 +442,11 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
         <button onClick={() => setExpandedPickId(expanded ? null : pick.id)}
           className="w-full flex items-center justify-between gap-2 text-left">
           <div className="flex items-center gap-1.5 min-w-0">
+            {score.potdCount > 0 && (
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-[#ff79c6]/15 text-[#ff79c6] border border-[#ff79c6]/50 flex-shrink-0">
+                POTD
+              </span>
+            )}
             {pickSources.length > 1 && (
               <span className="text-[10px] font-bold font-mono tabular-nums px-1.5 py-0.5 rounded-full bg-[#50fa7b]/15 text-[#50fa7b] border border-[#50fa7b]/30 flex-shrink-0">
                 {pickSources.length}×
@@ -536,20 +571,29 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
             {pickSources.length === 0 && (
               <div className="text-xs text-[#6272a4]">No sources on this pick.</div>
             )}
-            {pickSources.map((src) => {
+            {resolveEntries(pick.sources, sourcesMap).map(({ entry, src }) => {
               const tier = getSourceTier(src, sport);
+              const sKey = strengthKey(entry);
               return (
-                <div key={src.id} className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-[#f8f8f2]">{src.name}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE_CLASS[tier]}`}>
+                <div key={src.id} className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-xs text-[#f8f8f2] truncate">{src.name}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${TIER_BADGE_CLASS[tier]}`}>
                       {tier} · {TIER_NAMES[tier]}{src.sportTiers?.[sport] ? "" : " (default)"}
                     </span>
                   </div>
-                  <button
-                    onClick={() => updatePickSources(pick.id, (pick.sources || []).filter((ps) => ps.sourceId !== src.id))}
-                    className="text-[#6272a4] active:text-[#ff5555] text-base leading-none px-2.5 py-2 -my-1.5 -mr-1.5"
-                  >×</button>
+                  <div className="flex items-center flex-shrink-0">
+                    {/* Tap to cycle how hard this source is on the play: Lean → Play → POTD */}
+                    <button
+                      onClick={() => cycleSourceStrength(pick.id, src.id)}
+                      aria-label={`${src.name}: ${STRENGTH[sKey].label} — tap to change`}
+                      className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${STRENGTH[sKey].cls}`}
+                    >{STRENGTH[sKey].label}</button>
+                    <button
+                      onClick={() => updatePickSources(pick.id, (pick.sources || []).filter((ps) => ps.sourceId !== src.id))}
+                      className="text-[#6272a4] active:text-[#ff5555] text-base leading-none px-2.5 py-2 -my-1.5 -mr-1.5"
+                    >×</button>
+                  </div>
                 </div>
               );
             })}
@@ -905,8 +949,14 @@ export default function BetBoard() {
   const [editingGameId, setEditingGameId] = useState(null);
   const [editingGameLabel, setEditingGameLabel] = useState("");
   const [editingGameTime, setEditingGameTime] = useState("");
+  // Free-text scouting notes per game — matchup stats, injuries, whatever moved you.
+  const [notesGameId, setNotesGameId] = useState(null);
+  const [notesDraft, setNotesDraft] = useState("");
   const [pickLabel, setPickLabel] = useState("");
   const [selectedSourceIds, setSelectedSourceIds] = useState(new Set());
+  // sourceId → "lean" | "potd" for the pick being composed. Sources absent from this
+  // map are normal plays; the map is keyed separately so selection stays a plain Set.
+  const [sourceStrengths, setSourceStrengths] = useState({});
   // parlay builder (ladders live on a pick — managed in PickCard via updatePickRungs)
   const [addMode, setAddMode] = useState("single"); // "single" | "parlay"
   const [ticketName, setTicketName] = useState("");
@@ -937,14 +987,14 @@ export default function BetBoard() {
 
   // promos & their config lists (books + types managed in Setup)
   const [books, setBooks] = useState([]);
-  const [promoTypes, setPromoTypes] = useState([]);
+  // Promo types were removed from the UI. Whatever list is already in stored
+  // settings is carried through untouched so the change stays non-destructive.
+  const legacyPromoTypes = useRef([]);
   const [newBookName, setNewBookName] = useState("");
-  const [newPromoTypeName, setNewPromoTypeName] = useState("");
   const [promos, setPromos] = useState([]);
-  const [promoView, setPromoView] = useState("all"); // "all" | "byBook" | "byType"
+  const [promoView, setPromoView] = useState("all"); // "all" | "byBook"
   const [newPromoName, setNewPromoName] = useState("");
   const [newPromoBookId, setNewPromoBookId] = useState("");
-  const [newPromoTypeId, setNewPromoTypeId] = useState("");
   const [editingPromoCell, setEditingPromoCell] = useState(null); // { promoId, field }
   const [editingPromoCellValue, setEditingPromoCellValue] = useState("");
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -1027,7 +1077,7 @@ export default function BetBoard() {
         setSources(loadedSources);
         setUnitValue(loadedUnit);
         setBooks(loadedBooks);
-        setPromoTypes(loadedPromoTypes);
+        legacyPromoTypes.current = loadedPromoTypes;
         setGames(loadedBoard.games);
         setPicks(loadedBoard.picks);
         setTickets(loadedBoard.tickets);
@@ -1044,13 +1094,13 @@ export default function BetBoard() {
     updateExportJson(sources);
   }, [sources]);
 
-  const persistSettings = useCallback(async (nextSources, nextUnit, nextBooks = books, nextPromoTypes = promoTypes) => {
+  const persistSettings = useCallback(async (nextSources, nextUnit, nextBooks = books) => {
     try {
-      await storage.set("settings", JSON.stringify({ sources: nextSources, unitValue: nextUnit, books: nextBooks, promoTypes: nextPromoTypes }));
+      await storage.set("settings", JSON.stringify({ sources: nextSources, unitValue: nextUnit, books: nextBooks, promoTypes: legacyPromoTypes.current }));
     } catch (e) {
       console.error("Failed to save settings", e);
     }
-  }, [books, promoTypes]);
+  }, [books]);
 
   const persistBoard = useCallback(async (nextGames, nextPicks, nextTickets = tickets, nextPromos = promos) => {
     try {
@@ -1170,32 +1220,18 @@ export default function BetBoard() {
     if (!name) return;
     const color = CHIP_COLORS[books.length % CHIP_COLORS.length];
     const next = [...books, { id: uid(), name, color }];
-    setBooks(next); persistSettings(sources, unitValue, next, promoTypes);
+    setBooks(next); persistSettings(sources, unitValue, next);
     setNewBookName("");
   }
 
   function updateBookColor(id, color) {
     const next = books.map((b) => b.id === id ? { ...b, color } : b);
-    setBooks(next); persistSettings(sources, unitValue, next, promoTypes);
+    setBooks(next); persistSettings(sources, unitValue, next);
   }
 
   function deleteBook(id) {
     const next = books.filter((b) => b.id !== id);
-    setBooks(next); persistSettings(sources, unitValue, next, promoTypes);
-  }
-
-  // ----- promo types -----
-  function addPromoType() {
-    const name = newPromoTypeName.trim();
-    if (!name) return;
-    const next = [...promoTypes, { id: uid(), name }];
-    setPromoTypes(next); persistSettings(sources, unitValue, books, next);
-    setNewPromoTypeName("");
-  }
-
-  function deletePromoType(id) {
-    const next = promoTypes.filter((t) => t.id !== id);
-    setPromoTypes(next); persistSettings(sources, unitValue, books, next);
+    setBooks(next); persistSettings(sources, unitValue, next);
   }
 
   // ----- promos -----
@@ -1208,13 +1244,12 @@ export default function BetBoard() {
       id: uid(),
       name,
       bookId: newPromoBookId,
-      typeId: newPromoTypeId || null,
       used: false,
       createdAt: new Date().toISOString(),
     };
     const next = [...promos, promo];
     setPromos(next); persistBoard(games, picks, tickets, next);
-    setNewPromoName(""); setNewPromoBookId(""); setNewPromoTypeId("");
+    setNewPromoName(""); setNewPromoBookId("");
     showToast("Promo added");
   }
 
@@ -1338,6 +1373,27 @@ export default function BetBoard() {
     showToast("Game updated");
   }
 
+  // Empty notes are stripped rather than stored as "", so `game.notes` is either
+  // real text or absent — no blank note blocks rendering on the board.
+  function saveGameNotes(id) {
+    const text = notesDraft.trim();
+    const nextGames = games.map((g) => {
+      if (g.id !== id) return g;
+      const { notes, ...rest } = g;
+      return text ? { ...rest, notes: text } : rest;
+    });
+    setGames(nextGames);
+    persistBoard(nextGames, picks);
+    setNotesGameId(null);
+    setNotesDraft("");
+    showToast(text ? "Note saved" : "Note cleared", text ? "success" : "remove");
+  }
+
+  function openGameNotes(game) {
+    setNotesGameId(game.id);
+    setNotesDraft(game.notes || "");
+  }
+
   // Delete an entire sport section: all its picks (and all games, for NFL).
   function deleteSport(sport) {
     const pickCount = picks.filter((p) => p.sport === sport).length;
@@ -1363,6 +1419,26 @@ export default function BetBoard() {
   function resetPickForm() {
     setPickLabel("");
     setSelectedSourceIds(new Set());
+    setSourceStrengths({});
+  }
+
+  // Build the stored source entries for the pick being composed. A normal play
+  // writes no `strength` key at all, matching how older picks are shaped.
+  function draftSourceEntries(withDate = true) {
+    return [...selectedSourceIds].map((sid) => ({
+      sourceId: sid,
+      ...(withDate ? { dateAdded: new Date().toISOString() } : {}),
+      ...(sourceStrengths[sid] ? { strength: sourceStrengths[sid] } : {}),
+    }));
+  }
+
+  function cycleDraftStrength(sourceId) {
+    setSourceStrengths((prev) => {
+      const key = nextStrength(strengthKey({ strength: prev[sourceId] }));
+      const next = { ...prev };
+      if (key === "normal") delete next[sourceId]; else next[sourceId] = key;
+      return next;
+    });
   }
 
   function canSubmitPick() {
@@ -1394,7 +1470,7 @@ export default function BetBoard() {
 
   function addPick() {
     if (!canSubmitPick()) return;
-    const entries = [...selectedSourceIds].map((sid) => ({ sourceId: sid, dateAdded: new Date().toISOString() }));
+    const entries = draftSourceEntries();
     const pick = {
       id: uid(),
       gameId: selectedGameId || null,
@@ -1434,6 +1510,25 @@ export default function BetBoard() {
 
   function updatePickSources(id, nextSources) {
     const next = picks.map((p) => p.id === id ? { ...p, sources: nextSources } : p);
+    setPicks(next);
+    persistBoard(games, next);
+  }
+
+  // Cycle one source's conviction on one pick: Lean → Play → POTD → Lean.
+  // A normal play stores no strength at all, so old picks stay untouched.
+  function cycleSourceStrength(pickId, sourceId) {
+    const next = picks.map((p) => {
+      if (p.id !== pickId) return p;
+      return {
+        ...p,
+        sources: (p.sources || []).map((ps) => {
+          if (ps.sourceId !== sourceId) return ps;
+          const key = nextStrength(strengthKey(ps));
+          const { strength, ...rest } = ps;
+          return key === "normal" ? rest : { ...rest, strength: key };
+        }),
+      };
+    });
     setPicks(next);
     persistBoard(games, next);
   }
@@ -1494,7 +1589,7 @@ export default function BetBoard() {
       label: pickLabel.trim(),
       sport: selectedSport,
       gameId: selectedGameId || null,
-      sources: [...selectedSourceIds].map((sid) => ({ sourceId: sid })),
+      sources: draftSourceEntries(false),
     };
     setDraftLegs((prev) => [...prev, leg]);
     setPickLabel("");
@@ -1582,7 +1677,6 @@ export default function BetBoard() {
   function renderPromoRow(p) {
     const isEditingName = editingPromoCell?.promoId === p.id && editingPromoCell.field === "name";
     const book = books.find((b) => b.id === p.bookId);
-    const type = promoTypes.find((t) => t.id === p.typeId);
     return (
       <tr key={p.id} className={`border-b border-[#44475a] last:border-0 ${p.used ? "opacity-50" : ""}`}>
         <td className="pl-2 pr-1 py-1.5 w-7">
@@ -1620,17 +1714,6 @@ export default function BetBoard() {
               chipStyle: chipStyle(bookColor(book)),
               text: book?.name || "—",
               children: books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>),
-            })}
-          </div>
-        </td>
-        <td className="px-1.5 py-1.5 w-28">
-          <div className="h-7 flex items-center min-w-0">
-            {renderChipSelect({
-              value: p.typeId || "",
-              onChange: (e) => updatePromoField(p.id, "typeId", e.target.value || null),
-              chipClass: p.typeId ? "text-[#8be9fd] bg-[#8be9fd]/10 border-[#8be9fd]/30" : "text-[#6272a4] bg-transparent border-[#44475a]",
-              text: type?.name || "—",
-              children: [<option key="__none" value="">—</option>, ...promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)],
             })}
           </div>
         </td>
@@ -1674,17 +1757,6 @@ export default function BetBoard() {
               chipClass: newPromoBookId ? "" : "text-[#6272a4] bg-transparent border-dashed border-[#44475a]",
               text: newPromoBookId ? (books.find((b) => b.id === newPromoBookId)?.name || "Book") : "Book",
               children: [<option key="__none" value="">Book</option>, ...books.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)],
-            })}
-          </div>
-        </td>
-        <td className="px-1.5 py-1.5 w-28">
-          <div className="h-7 flex items-center min-w-0">
-            {renderChipSelect({
-              value: newPromoTypeId,
-              onChange: (e) => setNewPromoTypeId(e.target.value),
-              chipClass: newPromoTypeId ? "text-[#8be9fd] bg-[#8be9fd]/10 border-[#8be9fd]/30" : "text-[#6272a4] bg-transparent border-dashed border-[#44475a]",
-              text: newPromoTypeId ? (promoTypes.find((t) => t.id === newPromoTypeId)?.name || "Type") : "Type",
-              children: [<option key="__none" value="">Type</option>, ...promoTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)],
             })}
           </div>
         </td>
@@ -1784,7 +1856,7 @@ export default function BetBoard() {
             <PickCard pick={pick} sport={pick.sport} games={games.filter((g) => g.sport === pick.sport)}
               sources={sources} sourcesMap={sourcesMap}
               expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-              toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
+              toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} cycleSourceStrength={cycleSourceStrength}
               movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
           </div>
         ))}
@@ -1850,6 +1922,47 @@ export default function BetBoard() {
       </div>
     );
 
+  // The note itself, shown whenever there's text and the editor isn't open.
+  // whitespace-pre-wrap so a multi-line scouting dump keeps its line breaks.
+  const notesBlock = (game) =>
+    game.notes && notesGameId !== game.id && (
+      <button onClick={() => openGameNotes(game)}
+        className="w-full text-left px-3 py-2 border-t border-[#44475a] bg-[#2d2f3b] active:bg-[#21222c]">
+        <div className="flex items-start gap-1.5">
+          <StickyNote size={12} className="text-[#f1fa8c] flex-shrink-0 mt-0.5" />
+          <span className="text-[11px] text-[#c8cbe0] leading-relaxed whitespace-pre-wrap min-w-0">{game.notes}</span>
+        </div>
+      </button>
+    );
+
+  const notesEditor = (game) =>
+    notesGameId === game.id && (
+      <div className="px-3 py-3 border-t border-[#44475a] bg-[#2d2f3b] rounded-b-lg space-y-2">
+        <textarea value={notesDraft} onChange={(e) => setNotesDraft(e.target.value)} rows={4} autoFocus
+          autoCapitalize="sentences" spellCheck={false}
+          placeholder="Injuries, matchup stats, line movement…"
+          className="w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm text-[#f8f8f2] placeholder-[#6272a4] resize-y" />
+        <div className="flex gap-2">
+          <button onClick={() => saveGameNotes(game.id)}
+            className="flex-1 bg-[#bd93f9] text-[#282a36] rounded-lg py-2 text-sm font-semibold">
+            Save
+          </button>
+          <button onClick={() => { setNotesGameId(null); setNotesDraft(""); }}
+            className="flex-1 bg-[#21222c] border border-[#44475a] rounded-lg py-2 text-sm text-[#6272a4]">
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+
+  const notesButton = (game, size) => (
+    <button onClick={() => (notesGameId === game.id ? setNotesGameId(null) : openGameNotes(game))}
+      aria-label={game.notes ? "Edit game notes" : "Add game notes"} aria-expanded={notesGameId === game.id}
+      className={`p-1.5 rounded-lg active:bg-[#282a36] ${game.notes ? "text-[#f1fa8c]" : "text-[#6272a4] active:text-[#f1fa8c]"}`}>
+      <StickyNote size={size} />
+    </button>
+  );
+
   const renderGameNode = (game, sport) => {
     const gamePicks = picks
       .filter((p) => p.gameId === game.id)
@@ -1867,6 +1980,7 @@ export default function BetBoard() {
               {gameOddsSummary(game) && <span className="text-[#8be9fd] tracking-tight">{gameOddsSummary(game)}</span>}
               {gameWhen(game) && <span className="text-[#8b93b8]">{gameWhen(game)}</span>}
               <div className="flex items-center gap-0.5 -mr-1">
+                {notesButton(game, 14)}
                 <button onClick={() => { setEditingGameId(game.id); setEditingGameLabel(game.label); setEditingGameTime(game.gameTime || ""); }}
                   aria-label="Edit game" className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
                   <Pencil size={14} />
@@ -1878,6 +1992,8 @@ export default function BetBoard() {
               </div>
             </div>
           </div>
+          {notesBlock(game)}
+          {notesEditor(game)}
           {editForm(game)}
         </div>
       );
@@ -1905,6 +2021,7 @@ export default function BetBoard() {
             </div>
           </button>
           <div className="flex items-center gap-0.5 flex-shrink-0 -mr-1">
+            {notesButton(game, 15)}
             <button onClick={() => { setEditingGameId(game.id); setEditingGameLabel(game.label); setEditingGameTime(game.gameTime || ""); }}
               aria-label="Edit game" className="text-[#6272a4] active:text-[#bd93f9] p-1.5 rounded-lg active:bg-[#282a36]">
               <Pencil size={15} />
@@ -1915,6 +2032,8 @@ export default function BetBoard() {
             </button>
           </div>
         </div>
+        {notesBlock(game)}
+        {notesEditor(game)}
         {editForm(game)}
         {!gameCollapsed && (
           <div className="divide-y divide-[#44475a]">
@@ -1922,7 +2041,7 @@ export default function BetBoard() {
               <PickCard key={pick.id} pick={pick} sport={sport} games={games.filter((g) => g.sport === sport)}
                 sources={sources} sourcesMap={sourcesMap}
                 expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
+                toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} cycleSourceStrength={cycleSourceStrength}
                 movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
             ))}
             {renderParlayLegRows(gameLegs)}
@@ -2035,7 +2154,7 @@ export default function BetBoard() {
                                 <PickCard key={pick.id} pick={pick} sport="NFL" games={games.filter((g) => g.sport === "NFL")}
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
+                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} cycleSourceStrength={cycleSourceStrength} movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
                               ))}
                           </div>
                         </div>
@@ -2096,7 +2215,7 @@ export default function BetBoard() {
                                   games={sportGames}
                                   sources={sources} sourcesMap={sourcesMap}
                                   expandedPickId={expandedPickId} setExpandedPickId={setExpandedPickId}
-                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources}
+                                  toggleStar={toggleStar} togglePlaced={togglePlaced} deletePick={deletePick} updatePickSources={updatePickSources} cycleSourceStrength={cycleSourceStrength}
                                   movePickToGame={movePickToGame} updatePickRungs={updatePickRungs} updatePickLabel={updatePickLabel} />
                               ))}
                             </div>
@@ -2276,12 +2395,19 @@ export default function BetBoard() {
                         const src = sources.find((s) => s.id === id);
                         if (!src) return null;
                         const tier = getSourceTier(src, selectedSport);
+                        const sKey = strengthKey({ strength: sourceStrengths[id] });
                         return (
                           <span key={id} className="flex items-center gap-1 bg-[#50fa7b]/10 border border-[#50fa7b]/40 text-[#50fa7b] text-xs px-2 py-0.5 rounded-full">
                             {src.name}
                             <span className={`text-[10px] px-1 py-px rounded ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
+                            {/* Tap to cycle this source's call: Lean → Play → POTD */}
                             <button
-                              onClick={(e) => { e.stopPropagation(); setSelectedSourceIds((prev) => { const n = new Set(prev); n.delete(id); return n; }); }}
+                              onClick={(e) => { e.stopPropagation(); cycleDraftStrength(id); }}
+                              className={`text-[10px] font-semibold px-1.5 py-px rounded-full border ${STRENGTH[sKey].cls}`}
+                              aria-label={`${src.name}: ${STRENGTH[sKey].label} — tap to change`}
+                            >{STRENGTH[sKey].label}</button>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setSelectedSourceIds((prev) => { const n = new Set(prev); n.delete(id); return n; }); setSourceStrengths((prev) => { const n = { ...prev }; delete n[id]; return n; }); }}
                               className="text-[#50fa7b] hover:text-[#69ff94] leading-none text-sm px-1.5 py-1 -my-1 -mr-1.5"
                               aria-label={`Remove ${src.name}`}
                             >×</button>
@@ -2322,6 +2448,7 @@ export default function BetBoard() {
                                     active ? next.delete(s.id) : next.add(s.id);
                                     return next;
                                   });
+                                  if (active) setSourceStrengths((prev) => { const n = { ...prev }; delete n[s.id]; return n; });
                                   setSourceSearch("");
                                   setSourceDropdownOpen(false);
                                 }}
@@ -2346,6 +2473,13 @@ export default function BetBoard() {
                     {/* Click-outside close */}
                     {sourceDropdownOpen && (
                       <div className="fixed inset-0 z-10" onClick={() => { setSourceDropdownOpen(false); setSourceSearch(""); }} />
+                    )}
+                    {selectedSourceIds.size > 0 && (
+                      <p className="mt-1.5 text-[10px] text-[#6272a4]">
+                        Tap a source's <span className="text-[#f8f8f2]">Play</span> chip to mark it a{" "}
+                        <span className="text-[#ffb86c]">Lean</span> (75% edge) or their{" "}
+                        <span className="text-[#ff79c6]">POTD</span> (140%).
+                      </p>
                     )}
                   </div>
                 )}
@@ -2572,32 +2706,6 @@ export default function BetBoard() {
               )}
             </div>
 
-            <div>
-              <label className="text-xs uppercase tracking-wide text-[#6272a4]">Promo types</label>
-              <div className="mt-1 flex gap-2">
-                <input type="text" value={newPromoTypeName} onChange={(e) => setNewPromoTypeName(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && addPromoType()}
-                  autoCapitalize="words" autoCorrect="off" spellCheck={false}
-                  placeholder="e.g. Profit Boost"
-                  className="flex-1 bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]" />
-                <button onClick={addPromoType} className="bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2">
-                  <Plus size={18} />
-                </button>
-              </div>
-              {promoTypes.length > 0 && (
-                <div className="mt-2 space-y-1.5">
-                  {promoTypes.map((t) => (
-                    <div key={t.id} className="bg-[#343746] border border-[#44475a] rounded-lg px-3 py-2 flex items-center">
-                      <span className="flex-1 text-sm text-[#f8f8f2]">{t.name}</span>
-                      <button onClick={() => deletePromoType(t.id)} aria-label="Delete promo type"
-                        className="text-[#6272a4] active:text-[#ff5555] p-1.5 -mr-1 rounded-lg">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
 
             <div className="bg-[#343746] border border-[#44475a] rounded-lg overflow-hidden">
               <button
@@ -2645,7 +2753,7 @@ export default function BetBoard() {
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <div className="flex rounded-lg border border-[#44475a] text-xs overflow-hidden">
-                {[["all", "All"], ["byBook", "By Book"], ["byType", "By Type"]].map(([v, l]) => (
+                {[["all", "All"], ["byBook", "By Book"]].map(([v, l]) => (
                   <button key={v} onClick={() => setPromoView(v)}
                     className={`px-2.5 py-1.5 ${promoView === v ? "bg-[#bd93f9] text-[#282a36] font-semibold" : "bg-[#343746] text-[#6272a4]"}`}>
                     {l}
@@ -2667,14 +2775,12 @@ export default function BetBoard() {
                     <th className="w-7 py-1.5" />
                     <th className="text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-2 font-normal">Name</th>
                     <th className="w-16 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-1.5 font-normal">Book</th>
-                    <th className="w-28 text-left text-[10px] uppercase tracking-wide text-[#6272a4] py-1.5 px-1.5 font-normal">Type</th>
                     <th className="w-7 py-1.5" />
                   </tr>
                 </thead>
                 <tbody>
                   {promoView === "all" && promos.map(renderPromoRow)}
                   {promoView === "byBook" && renderPromosByGroup(promos, "bookId", books)}
-                  {promoView === "byType" && renderPromosByGroup(promos, "typeId", promoTypes)}
                   {renderAddPromoRow()}
                 </tbody>
               </table>
@@ -2769,6 +2875,17 @@ export default function BetBoard() {
             <div className="space-y-1">
               <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Consensus (diminishing returns)</div>
               <p className="text-xs text-[#6272a4] leading-relaxed">Each additional agreeing source counts <span className="text-[#f8f8f2]">60%</span> of the previous. Two A-sources = 10 + 6 = 16 edge. Three = 10 + 6 + 3.6 = 19.6.</p>
+            </div>
+
+            <div className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Lean / POTD</div>
+              <p className="text-xs text-[#6272a4] leading-relaxed">
+                How hard each source is on the play, set per source per pick. A{" "}
+                <span className="text-[#ffb86c]">Lean</span> counts <span className="text-[#f8f8f2]">75%</span> of that
+                source's tier edge; their <span className="text-[#ff79c6]">POTD</span> counts{" "}
+                <span className="text-[#f8f8f2]">140%</span>. A lone A-source POTD is 14 edge — a 1.5u play before anyone
+                else agrees; that same source leaning is 7.5, a 0.5u dart.
+              </p>
             </div>
 
             <div className="space-y-1">

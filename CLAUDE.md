@@ -42,9 +42,13 @@ All data lives in two logical keys persisted via `storage.js`:
 ```json
 {
   "sources": [{ "id": "...", "name": "...", "tiers": { "NFL": "A", "NBA": "B" } }],
-  "unitValue": "100"
+  "unitValue": "100",
+  "books": [{ "id": "...", "name": "...", "color": "#bd93f9" }],
+  "promoTypes": []
 }
 ```
+
+`promoTypes` is vestigial — the promo-type feature was removed from the UI, but whatever list is already stored is read into a ref and written back untouched so the data isn't destroyed.
 
 ### `"board"` key
 ```json
@@ -60,6 +64,7 @@ All data lives in two logical keys persisted via `storage.js`:
   id, label, sport, home, away,
   date,      // "YYYY-MM-DD" in Central time
   gameTime,  // display string e.g. "7:30 PM"
+  notes,     // optional free-text scouting notes (injuries, matchup stats); absent when empty
   createdAt,
   raw: { idEvent }  // ESPN event id (autofill only)
 }
@@ -71,7 +76,8 @@ All data lives in two logical keys persisted via `storage.js`:
 ```js
 {
   id, gameId, label,    // label is the free-text pick e.g. "Chiefs -3.5"
-  sources: [{ sourceId }],
+  // strength is omitted for a normal play; "lean" or "potd" scale that source's edge
+  sources: [{ sourceId, dateAdded, strength }],
   star,      // boolean — boosts confidence score
   placed,    // boolean — bet has been placed
   result,    // null | "win" | "loss" | "push"
@@ -91,23 +97,35 @@ All data lives in two logical keys persisted via `storage.js`:
 
 ## Scoring System
 
-Each pick gets a 0–100 confidence score → maps to a unit size recommendation.
+Each pick gets an **edge** → maps to a unit size recommendation. All constants live at the top of `App.jsx`.
 
-| Tier | Weight |
+Each source contributes its tier edge:
+
+| Tier | Edge |
 |---|---|
-| A (Sharp) | 60 pts |
-| B (Solid) | 35 pts |
-| C (Long shot) | 15 pts |
+| A (Sharp) | 10 |
+| B (Solid) | 4.5 |
+| C (Long shot) | 1.5 |
 
-Star bonus: +20 pts. Cap: 100 pts.
+That edge is then scaled by how hard the source is on this specific play (`STRENGTH_MULT`) — a source can be a lean on one pick and their POTD on another:
 
-| Score | Decision |
+| Strength | Multiplier | Stored as |
+|---|---|---|
+| Lean | ×0.75 | `strength: "lean"` |
+| Play (default) | ×1 | key absent |
+| POTD | ×1.4 | `strength: "potd"` |
+
+Multiple sources give **diminishing returns**: edges are sorted strongest-first and each additional one counts `SOURCE_DECAY` (0.6) of the previous. Personal star adds a flat `STAR_EDGE` (+4) on top.
+
+| Edge | Decision |
 |---|---|
-| ≥85 with 2+ A sources | 2u |
-| ≥85 otherwise | 1.5u |
-| ≥70 | 1u |
-| ≥55 | 0.5u |
-| <55 | Pass |
+| ≥18 | 2u |
+| ≥14 | 1.5u |
+| ≥10 | 1u |
+| ≥7.5 | 0.5u |
+| <7.5 | Pass |
+
+Ladder rungs scale off the anchor pick's size, each capped at `LADDER_RUNG_DECAY` (55%) of the one above.
 
 ---
 
@@ -117,7 +135,8 @@ Star bonus: +20 pts. Cap: 100 pts.
 |---|---|
 | `"board"` | Read-only view of all picks grouped by sport → game. Shows score badge + unit recommendation. |
 | `"add"` | Add flow: pick a sport → pick or create a game → type the pick text → select sources → submit. |
-| `"setup"` | Manage sources (name + per-sport tier), set unit dollar value, import/export board JSON. |
+| `"setup"` | Manage sources (name + per-sport tier) and sportsbooks, set unit dollar value, import/export board JSON. |
+| `"promos"` | Name + Book table of sportsbook promos, grouped All / By Book. |
 
 ---
 
