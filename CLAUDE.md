@@ -218,6 +218,15 @@ Get the values from Supabase dashboard → Project Settings → API Keys.
 
 GitHub Pages via `vite build`. The `base: '/betting-board/'` in `vite.config.js` must match the repo name exactly.
 
+### Workflows (`.github/workflows/`)
+
+| File | Trigger | Purpose |
+|---|---|---|
+| `deploy.yml` | push to `main`, manual | Build and publish to GitHub Pages. |
+| `keep-supabase-awake.yml` | daily cron, manual | Reads one row from `boards` so Supabase doesn't pause the free-tier project for inactivity (it pauses after ~7 days idle). |
+
+Both use the `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY` repo secrets. Note that GitHub disables scheduled workflows in a repo with no commits for 60 days — if that happens, re-enable the keep-alive from the Actions tab.
+
 ---
 
 ## Key Conventions

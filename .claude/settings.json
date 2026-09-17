@@ -3,7 +3,10 @@
     "allow": [
       "Bash(echo \"---exit $?---\")",
       "Bash(npx vite *)",
-      "PowerShell(npm run dev)"
+      "PowerShell(npm run dev)",
+      "Bash(node -e ' *)",
+      "Bash(bash -n __TRACKED_VAR__/ping.sh)",
+      "Bash(bash -n /tmp/ping.sh)"
     ]
   },
   "enabledPlugins": {
