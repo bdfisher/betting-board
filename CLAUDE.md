@@ -103,7 +103,7 @@ Each source contributes its tier edge:
 
 | Tier | Edge |
 |---|---|
-| A (Sharp) | 10 |
+| A (Sharp) | 9 |
 | B (Solid) | 4.5 |
 | C (Long shot) | 1.5 |
 
@@ -119,11 +119,13 @@ Multiple sources give **diminishing returns**: edges are sorted strongest-first 
 
 | Edge | Decision |
 |---|---|
-| ≥18 | 2u |
+| ≥17.5 | 2u |
 | ≥14 | 1.5u |
-| ≥10 | 1u |
+| ≥11 | 1u |
 | ≥7.5 | 0.5u |
 | <7.5 | Pass |
+
+Anchor cases the thresholds are tuned to: 1 A = 9.0 (0.5u), 1 A + 1 B = 11.7 (1u), 2 A = 14.4 (1.5u), 3 A = 17.6 (2u), 2 A + star = 18.4 (2u).
 
 Ladder rungs scale off the anchor pick's size, each capped at `LADDER_RUNG_DECAY` (55%) of the one above.
 

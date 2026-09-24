@@ -7,7 +7,9 @@
       "Bash(node -e ' *)",
       "Bash(bash -n __TRACKED_VAR__/ping.sh)",
       "Bash(bash -n /tmp/ping.sh)",
-      "Bash(python -)"
+      "Bash(python -)",
+      "Bash(gh run *)",
+      "Bash(git remote *)"
     ]
   },
   "enabledPlugins": {

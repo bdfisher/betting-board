@@ -48,14 +48,16 @@ const TIER_BADGE_CLASS = {
 // give diminishing returns (each additional agreeing capper counts less than the
 // last), so a consensus of solid (B) cappers can build toward a bet without ever
 // running away, while sharp (A) sources drive the top end. All tunable here.
-const TIER_EDGE = { A: 10, B: 4.5, C: 1.5 };
+// A is 9, not 10, so a lone sharp is a 0.5u play — it takes a second opinion
+// (another source, your star, or their POTD) to reach a full unit.
+const TIER_EDGE = { A: 9, B: 4.5, C: 1.5 };
 const STAR_EDGE = 4;        // flat bump for your own conviction
 const SOURCE_DECAY = 0.6;   // each additional agreeing source counts 60% of the previous
 // How hard a source is banging the table on this particular play. Scales that one
 // source's tier edge, so the same capper can be a lean on one pick and their play
 // of the day on another. Absent strength = a normal play (×1).
-// 0.75 is deliberate: a lone A-source lean lands on exactly 7.5 edge = 0.5u, so a
-// sharp's soft call still gets a small bet rather than falling off to a pass.
+// A lone A-source lean is 6.75 edge — a pass. A sharp's soft call on its own
+// isn't a bet; it needs agreement from another source or your star.
 const STRENGTH_MULT = { lean: 0.75, potd: 1.4 };
 const STRENGTHS = [
   { key: "lean",   label: "Lean", cls: "text-[#ffb86c] bg-[#ffb86c]/10 border-[#ffb86c]/40" },
@@ -124,12 +126,13 @@ function scoreRung(rung, sourcesMap, sport) {
 }
 
 function scoreToDecision(edge) {
-  // Diminishing-returns edge ladder. A consensus of B-tier cappers asymptotes
-  // around ~11 (so it can reach 1u but never higher); sharp (A) consensus and a
-  // personal star are what push into 1.5u–2u territory.
-  if (edge >= 18) return DECISION.high;     // 2u
+  // Diminishing-returns edge ladder, tuned against these anchors (A = 9):
+  //   1 A = 9.0 → 0.5u · 1 A + 1 B = 11.7 → 1u · 2 A = 14.4 → 1.5u
+  //   3 A = 17.6 → 2u · 2 A + star = 18.4 → 2u
+  // B-only consensus asymptotes at 11.25, so it can scrape 1u but never higher.
+  if (edge >= 17.5) return DECISION.high;    // 2u
   if (edge >= 14) return DECISION.mid;       // 1.5u
-  if (edge >= 10) return DECISION.standard;  // 1u
+  if (edge >= 11) return DECISION.standard;  // 1u
   if (edge >= 7.5) return DECISION.small;    // 0.5u
   return DECISION.pass;
 }
@@ -533,7 +536,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
               <div key={label} className="flex items-center gap-2">
                 <span className="text-xs text-[#6272a4] w-28 flex-shrink-0">{label}</span>
                 <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
-                  <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 18) * 100)}%` }} />
+                  <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 17.5) * 100)}%` }} />
                 </div>
                 <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0 font-mono tabular-nums">{val.toFixed(1)}</span>
               </div>
@@ -804,7 +807,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                   <div key={label} className="flex items-center gap-2">
                     <span className="text-xs text-[#6272a4] w-28 flex-shrink-0">{label}</span>
                     <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
-                      <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 18) * 100)}%` }} />
+                      <div className="h-full bg-[#bd93f9]/60 rounded-full" style={{ width: `${Math.min(100, (val / 17.5) * 100)}%` }} />
                     </div>
                     <span className="text-xs text-[#6272a4] w-12 text-right flex-shrink-0 font-mono tabular-nums">{val.toFixed(1)}</span>
                   </div>
@@ -2860,11 +2863,11 @@ export default function BetBoard() {
             <div className="space-y-2">
               <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Source tiers — base edge</div>
               <div className="space-y-1.5">
-                {[["A — Sharp", 10, "#bd93f9"], ["B — Solid", 4.5, "#8be9fd"], ["C — Long shot", 1.5, "#6272a4"]].map(([label, edge, color]) => (
+                {[["A — Sharp", TIER_EDGE.A, "#bd93f9"], ["B — Solid", TIER_EDGE.B, "#8be9fd"], ["C — Long shot", TIER_EDGE.C, "#6272a4"]].map(([label, edge, color]) => (
                   <div key={label} className="flex items-center gap-3">
                     <span className="text-xs text-[#f8f8f2] w-32 flex-shrink-0">{label}</span>
                     <div className="flex-1 bg-[#21222c] rounded-full h-1.5 overflow-hidden">
-                      <div className="h-full rounded-full" style={{ width: `${(edge / 10) * 100}%`, backgroundColor: color, opacity: 0.6 }} />
+                      <div className="h-full rounded-full" style={{ width: `${(edge / TIER_EDGE.A) * 100}%`, backgroundColor: color, opacity: 0.6 }} />
                     </div>
                     <span className="text-xs text-[#6272a4] w-8 text-right flex-shrink-0">+{edge}</span>
                   </div>
@@ -2874,7 +2877,7 @@ export default function BetBoard() {
 
             <div className="space-y-1">
               <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Consensus (diminishing returns)</div>
-              <p className="text-xs text-[#6272a4] leading-relaxed">Each additional agreeing source counts <span className="text-[#f8f8f2]">60%</span> of the previous. Two A-sources = 10 + 6 = 16 edge. Three = 10 + 6 + 3.6 = 19.6.</p>
+              <p className="text-xs text-[#6272a4] leading-relaxed">Each additional agreeing source counts <span className="text-[#f8f8f2]">60%</span> of the previous. Two A-sources = 9 + 5.4 = 14.4 edge (1.5u). Three = 9 + 5.4 + 3.2 = 17.6 (2u).</p>
             </div>
 
             <div className="space-y-1">
@@ -2883,8 +2886,8 @@ export default function BetBoard() {
                 How hard each source is on the play, set per source per pick. A{" "}
                 <span className="text-[#ffb86c]">Lean</span> counts <span className="text-[#f8f8f2]">75%</span> of that
                 source's tier edge; their <span className="text-[#ff79c6]">POTD</span> counts{" "}
-                <span className="text-[#f8f8f2]">140%</span>. A lone A-source POTD is 14 edge — a 1.5u play before anyone
-                else agrees; that same source leaning is 7.5, a 0.5u dart.
+                <span className="text-[#f8f8f2]">140%</span>. A lone A-source POTD is 12.6 edge — a 1u play before anyone
+                else agrees; that same source leaning is 6.75, a pass.
               </p>
             </div>
 
@@ -2897,9 +2900,9 @@ export default function BetBoard() {
               <div className="text-[10px] uppercase tracking-wide text-[#6272a4]">Sizing thresholds</div>
               <div className="rounded-lg overflow-hidden border border-[#44475a]">
                 {[
-                  ["≥ 18 edge", "2u", DECISION.high.textCls],
+                  ["≥ 17.5 edge", "2u", DECISION.high.textCls],
                   ["≥ 14 edge", "1.5u", DECISION.mid.textCls],
-                  ["≥ 10 edge", "1u", DECISION.standard.textCls],
+                  ["≥ 11 edge", "1u", DECISION.standard.textCls],
                   ["≥ 7.5 edge", "0.5u", DECISION.small.textCls],
                   ["< 7.5 edge", "Pass", DECISION.pass.textCls],
                 ].map(([threshold, label, cls]) => (
