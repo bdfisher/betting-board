@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { storage } from "./storage";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
+import PickInbox from "./PickInbox";
+import { fetchPending, ingestUrl, markAccepted } from "./services/inboxApi";
 import {
   Plus,
   Trash2,
@@ -19,6 +21,7 @@ import {
   Tag,
   RefreshCw,
   StickyNote,
+  Inbox,
 } from "lucide-react";
 import AddPickAutofill from "./AddPick";
 import sportsApi, { parseEspnEvent } from "./services/sportsApi";
@@ -988,6 +991,15 @@ export default function BetBoard() {
   const [confirmDialog, setConfirmDialog] = useState(null); // { message, confirmLabel, onConfirm }
   const [showHelp, setShowHelp] = useState(false);
 
+  // Picks extracted from shared tweets/screenshots, waiting to be reviewed.
+  // These live in their own Supabase table, not in the board blob — see
+  // services/inboxApi.js for why.
+  const [inbox, setInbox] = useState([]);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  const [ingestUrlText, setIngestUrlText] = useState("");
+  const [ingesting, setIngesting] = useState(false);
+  const [ingestStatus, setIngestStatus] = useState(null); // { ok, message }
+
   // promos & their config lists (books + types managed in Setup)
   const [books, setBooks] = useState([]);
   // Promo types were removed from the UI. Whatever list is already in stored
@@ -1096,6 +1108,31 @@ export default function BetBoard() {
   useEffect(() => {
     updateExportJson(sources);
   }, [sources]);
+
+  // Load the pick inbox on mount and whenever the app comes back to the
+  // foreground. The usual flow is share-from-X then open the PWA, so a refresh
+  // on visibility is what makes the banner show up without a manual reload.
+  useEffect(() => {
+    let mounted = true;
+    const refresh = async () => {
+      const rows = await fetchPending();
+      if (mounted) setInbox(rows);
+    };
+    refresh();
+    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      mounted = false;
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, []);
+
+  // Close the review sheet once the last row is cleared, rather than leaving an
+  // empty sheet open. The banner can't open it empty, so this only fires after
+  // you've worked through the queue.
+  useEffect(() => {
+    if (inboxOpen && inbox.length === 0) setInboxOpen(false);
+  }, [inbox.length, inboxOpen]);
 
   const persistSettings = useCallback(async (nextSources, nextUnit, nextBooks = books) => {
     try {
@@ -1452,6 +1489,73 @@ export default function BetBoard() {
   function showToast(message, type = "success") {
     setToast({ message, type });
     setTimeout(() => setToast(null), 2500);
+  }
+
+  // Paste a post URL → edge function extracts the picks → they land in the
+  // Inbox for review. Nothing reaches the board until you accept them.
+  async function runIngest() {
+    const url = ingestUrlText.trim();
+    if (!url || ingesting) return;
+
+    setIngesting(true);
+    setIngestStatus(null);
+    try {
+      const res = await ingestUrl(url);
+      if (res.ok && res.picks > 0) {
+        setIngestUrlText("");
+        setIngestStatus({ ok: true, message: `Found ${res.picks} pick${res.picks === 1 ? "" : "s"} — review in the Inbox.` });
+        setInbox(await fetchPending());
+        setInboxOpen(true);
+      } else if (res.ok) {
+        // Reached the model fine, it just didn't find a bet in the post.
+        setIngestStatus({ ok: false, message: "No picks found in that post." });
+        setInbox(await fetchPending());
+      } else {
+        setIngestStatus({ ok: false, message: res.error || "Couldn't read that post." });
+      }
+    } finally {
+      setIngesting(false);
+    }
+  }
+
+  // The single point where inbox data becomes board data. Builds picks in
+  // exactly the shape addPick() produces and persists through the normal
+  // persistBoard path, so the inbox never writes the board blob itself.
+  async function acceptInboxPicks(row, chosen) {
+    const now = new Date().toISOString();
+    const newPicks = chosen.map((p) => ({
+      id: uid(),
+      gameId: p.gameId || null,
+      label: (p.label || "").trim(),
+      sport: "NFL",
+      sources: p.sourceId
+        ? [{
+            sourceId: p.sourceId,
+            dateAdded: now,
+            // A normal play stores NO strength key — STRENGTH_MULT has no
+            // "normal" entry and the scoring model keys off its absence.
+            ...(p.strength && p.strength !== "normal" ? { strength: p.strength } : {}),
+          }]
+        : [],
+      star: false,
+      placed: false,
+      lineMoveStatus: null,
+      createdAt: now,
+      rungs: [],
+    })).filter((p) => p.label);
+
+    if (!newPicks.length) {
+      showToast("Nothing to add", "remove");
+      return;
+    }
+
+    const nextPicks = [...picks, ...newPicks];
+    setPicks(nextPicks);
+    await persistBoard(games, nextPicks);
+
+    await markAccepted(row.id);
+    setInbox((cur) => cur.filter((r) => r.id !== row.id));
+    showToast(`Added ${newPicks.length} pick${newPicks.length === 1 ? "" : "s"}`);
   }
 
   function requestConfirm(message, onConfirm, confirmLabel = "Delete") {
@@ -2073,6 +2177,21 @@ export default function BetBoard() {
       <div className={`${shellWidth} mx-auto px-4 pt-4`}>
         {activeTab === "board" && (
           <div className="space-y-4">
+            {/* Picks shared in from X, waiting for review. Only rendered when
+                something's actually pending. */}
+            {inbox.length > 0 && (
+              <button
+                onClick={() => setInboxOpen(true)}
+                className="w-full flex items-center justify-between gap-2 bg-[#bd93f9]/15 border border-[#bd93f9]/40 rounded-lg px-3 py-2.5 active:bg-[#bd93f9]/25"
+              >
+                <span className="flex items-center gap-2 text-sm text-[#bd93f9] font-medium">
+                  <Inbox size={16} />
+                  {inbox.length} post{inbox.length === 1 ? "" : "s"} waiting
+                </span>
+                <ChevronRight size={16} className="text-[#bd93f9]" />
+              </button>
+            )}
+
             {picks.length === 0 && games.length === 0 && tickets.length === 0 ? (
               <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
                 No picks yet.{" "}
@@ -2244,6 +2363,43 @@ export default function BetBoard() {
 
         {activeTab === "add" && (
           <div className="space-y-4">
+
+            {/* Paste a post URL — extracts the picks into the Inbox for review.
+                NFL only; a cheat-sheet post can yield 20+ props. */}
+            <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
+              <label className="text-xs uppercase tracking-wide text-[#6272a4]">
+                Import from a post
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="url"
+                  inputMode="url"
+                  value={ingestUrlText}
+                  onChange={(e) => { setIngestUrlText(e.target.value); setIngestStatus(null); }}
+                  onKeyDown={(e) => { if (e.key === "Enter") runIngest(); }}
+                  autoCorrect="off" spellCheck={false} autoComplete="off"
+                  placeholder="Paste x.com link…"
+                  className="flex-1 min-w-0 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#6272a4]"
+                />
+                <button
+                  onClick={runIngest}
+                  disabled={ingesting || !ingestUrlText.trim()}
+                  className="flex-shrink-0 bg-[#bd93f9] text-[#282a36] rounded-lg px-3 py-2.5 text-sm font-semibold active:opacity-80 disabled:opacity-40"
+                >
+                  {ingesting ? "Reading…" : "Import"}
+                </button>
+              </div>
+              {ingesting && (
+                <p className="text-xs text-[#6272a4]">
+                  Reading the post and matching players to games — a multi-page sheet takes a few seconds.
+                </p>
+              )}
+              {ingestStatus && (
+                <p className={`text-xs ${ingestStatus.ok ? "text-[#50fa7b]" : "text-[#ff5555]"}`}>
+                  {ingestStatus.message}
+                </p>
+              )}
+            </div>
 
             {/* Mode: single pick vs parlay */}
             <div className="flex rounded-lg overflow-hidden border border-[#44475a]">
@@ -2848,6 +3004,17 @@ export default function BetBoard() {
       >
         <HelpCircle size={22} />
       </button>
+
+      {/* Pick inbox — review sheet for picks shared in from X */}
+      <PickInbox
+        open={inboxOpen}
+        rows={inbox}
+        games={games}
+        sources={sources}
+        onClose={() => setInboxOpen(false)}
+        onAccept={acceptInboxPicks}
+        onDismissed={(id) => setInbox((cur) => cur.filter((r) => r.id !== id))}
+      />
 
       {/* Scoring help modal */}
       {showHelp && (

@@ -24,7 +24,15 @@
       "PowerShell(npm run dev)",
       "Bash(npm run *)",
       "Bash(curl -s \"https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260711\")",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(curl -s \"https://site.web.api.espn.com/apis/search/v2?query=jefferson&limit=10&type=player\")",
+      "Bash(curl -s \"https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams\")",
+      "mcp__plugin_supabase_supabase__list_tables",
+      "mcp__plugin_supabase_supabase__execute_sql",
+      "Bash(curl -s -X POST https://zeafyxuumutysmsdmwrd.supabase.co/functions/v1/ingest-pick *)",
+      "Bash(python3 -m json.tool)",
+      "mcp__plugin_supabase_supabase__deploy_edge_function",
+      "Bash(python3 -)"
     ]
   }
 }

@@ -24,12 +24,23 @@ Dev server: `npm run dev` → `http://localhost:5173/betting-board/`
 src/
   App.jsx          — entire app UI and state (single-component architecture)
   AddPick.jsx      — ESPN autofill component rendered inside App's "Add" tab
+  PickInbox.jsx    — review sheet for picks shared in from X (see Pick Ingestion)
   AuthGate.jsx     — Supabase magic-link auth wrapper (skipped when Supabase not configured)
   storage.js       — get/set wrapper over Supabase + localStorage fallback
   supabaseClient.js — creates Supabase client from env vars; exports isSupabaseConfigured
   services/
     sportsApi.js   — ESPN API wrapper (getEventsByDate, getNflWeekEvents, parseEspnEvent)
+    inboxApi.js    — reads/updates the pick_inbox staging table
   index.css        — Tailwind base + minor globals
+
+supabase/
+  README.md        — ingestion setup: deploy, secrets, iOS Shortcut
+  migrations/      — pick_inbox table + storage bucket
+  functions/ingest-pick/
+    index.ts       — HTTP handler (Deno), auth, orchestration
+    fxtwitter.ts   — tweet URL → text + media
+    espn.ts        — player prop → current team → board game
+    extract.ts     — Gemini call, JSON schema, system prompt
 ```
 
 ---
@@ -205,6 +216,20 @@ In `App.jsx`, `importGamesFromApi(newGames)` deduplicates by `sport + label` bef
 
 ---
 
+## Pick Ingestion (share a tweet → Inbox)
+
+An iOS Shortcut shares a tweet URL or screenshot to a Supabase Edge Function, which extracts the pick(s) and stages them for review. **NFL only.** Full setup in [`supabase/README.md`](supabase/README.md).
+
+**The architectural constraint:** nothing in this pipeline writes `boards.board`. `persistBoard` rewrites that entire blob from in-memory state on every mutation and the app only reads it on mount, so an external writer would be silently clobbered by the next tap. Extracted picks land in a separate `pick_inbox` table; they only become board data when you tap Accept, which runs them through `acceptInboxPicks` → the normal `persistBoard` path.
+
+**Player props are resolved in code, never by the model.** Rosters churn (J.K. Dobbins: Ravens → Chargers → Broncos in three seasons) and training data is frozen, so a model will name a stale team with full confidence. `espn.ts` instead: searches ESPN for the name → filters to `defaultLeagueSlug === "nfl"` → intersects against games on the board → verifies the player is on that team's **current roster** (ESPN's search indexes retired players under their last team, which otherwise creates false ambiguity). Anything it can't resolve to exactly one player arrives gameless with a warning rather than guessed at.
+
+The model's job is narrow: read the post, output `playerName` as written, the side, line, stat, and `strength` (`lean`/`normal`/`potd`). It never infers a team and never invents a `gameId` or `sourceId`.
+
+Extraction accuracy lives in the system prompt in `extract.ts` — add real examples there as misses turn up.
+
+---
+
 ## Storage (`src/storage.js`)
 
 `storage.get(key)` / `storage.set(key, value)` — **only accepts `"settings"` or `"board"`**. Any other key silently returns null. Do not try to use this for custom cache keys; use `localStorage` directly (as `AddPick.jsx` does).
@@ -232,6 +257,8 @@ VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxxxxxxxxxxxxxxxxxxx
 - **GitHub Pages deployment**: add the same two vars as repository Secrets under Settings → Secrets → Actions.
 
 Get the values from Supabase dashboard → Project Settings → API Keys.
+
+The `ingest-pick` Edge Function has its own separate secrets (`GEMINI_API_KEY`, `INGEST_TOKEN`, `INGEST_USER_ID`, optional `GEMINI_MODEL`), set with `supabase secrets set` rather than in `.env` — they are server-side only and must never reach the client bundle. See [`supabase/README.md`](supabase/README.md).
 
 ---
 
