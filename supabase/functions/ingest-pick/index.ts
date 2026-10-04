@@ -23,10 +23,22 @@ interface RequestBody {
   text?: string;
 }
 
+// The PWA calls this cross-origin (github.io → supabase.co), so every response
+// needs CORS headers and OPTIONS needs its own handler. "*" is safe here
+// because the function authenticates every request itself and never relies on
+// cookies — a third-party page still has no JWT and gets a 401.
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers":
+    "authorization, x-client-info, apikey, content-type, x-ingest-token",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Max-Age": "86400",
+};
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...CORS },
   });
 }
 
@@ -72,6 +84,12 @@ function disambiguateSurnames(picks: Array<Record<string, unknown>>): void {
 }
 
 Deno.serve(async (req: Request) => {
+  // A browser preflights any cross-origin POST carrying Authorization and a
+  // JSON content-type. Without this branch that preflight 405s and the request
+  // is never sent, surfacing in the app as the opaque "Failed to send a request
+  // to the Edge Function". curl doesn't preflight, which is why only a real
+  // device caught it.
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
 
   const supabase = createClient(
