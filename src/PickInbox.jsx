@@ -48,7 +48,7 @@ function OriginalMedia({ row }) {
   );
 }
 
-function PickRow({ pick, games, sources, onChange }) {
+function PickRow({ pick, games, onChange }) {
   const sportGames = useMemo(
     () => games.filter((g) => g.sport === "NFL"),
     [games],
@@ -119,25 +119,6 @@ function PickRow({ pick, games, sources, onChange }) {
           </select>
         </div>
 
-        {/* Source */}
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-wide text-[#6272a4] w-12 flex-shrink-0">
-            Source
-          </span>
-          <select
-            value={pick.sourceId ?? ""}
-            onChange={(e) => onChange({ ...pick, sourceId: e.target.value || null })}
-            className={`${inputCls} py-1.5 ${!pick.sourceId ? "border-[#ffb86c]/60" : ""}`}
-          >
-            <option value="">
-              {pick.sourceNameRaw ? `— unmatched: ${pick.sourceNameRaw} —` : "— no source —"}
-            </option>
-            {sources.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-        </div>
-
         {/* Strength */}
         <div className="flex items-center gap-2">
           <span className="text-[10px] uppercase tracking-wide text-[#6272a4] w-12 flex-shrink-0">
@@ -176,6 +157,13 @@ function InboxCard({ row, games, sources, onAccept, onDismiss }) {
   });
   const [busy, setBusy] = useState(false);
 
+  // A post has exactly one author, so the source belongs to the card rather
+  // than to each pick — fixing it 16 times on a cheat sheet would be absurd.
+  // Seeded from whatever the resolver matched; falls back to any pick that did.
+  const [sourceId, setSourceId] = useState(
+    () => (row.extracted?.picks ?? []).find((p) => p.sourceId)?.sourceId ?? "",
+  );
+
   const warnings = row.extracted?.warnings ?? [];
   const selected = picks.filter((p) => !p._skip);
   const isSheet = picks.length > CHERRY_PICK_THRESHOLD;
@@ -187,7 +175,7 @@ function InboxCard({ row, games, sources, onAccept, onDismiss }) {
   const accept = async () => {
     if (!selected.length || busy) return;
     setBusy(true);
-    await onAccept(row, selected);
+    await onAccept(row, selected.map((p) => ({ ...p, sourceId: sourceId || null })));
     setBusy(false);
   };
 
@@ -211,6 +199,29 @@ function InboxCard({ row, games, sources, onAccept, onDismiss }) {
       {row.raw_text && (
         <p className="text-xs text-[#6272a4] leading-relaxed whitespace-pre-wrap line-clamp-6">
           {row.raw_text}
+        </p>
+      )}
+
+      {/* One source for the whole post. */}
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-[#6272a4] flex-shrink-0">
+          Source
+        </span>
+        <select
+          value={sourceId}
+          onChange={(e) => setSourceId(e.target.value)}
+          className={`${inputCls} py-1.5 ${sourceId ? "" : "border-[#ffb86c]/60"}`}
+        >
+          <option value="">Choose a source…</option>
+          {sources.map((s) => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
+      </div>
+
+      {!sourceId && row.author_handle && (
+        <p className="text-[11px] text-[#ffb86c] -mt-1">
+          {row.author_handle} isn't in your sources yet — pick one, or add it in Setup.
         </p>
       )}
 
@@ -247,7 +258,6 @@ function InboxCard({ row, games, sources, onAccept, onDismiss }) {
               key={p._key}
               pick={p}
               games={games}
-              sources={sources}
               onChange={(next) =>
                 setPicks((cur) => cur.map((x) => (x._key === next._key ? next : x)))
               }
@@ -259,11 +269,13 @@ function InboxCard({ row, games, sources, onAccept, onDismiss }) {
       {picks.length > 0 && (
         <button
           onClick={accept}
-          disabled={!selected.length || busy}
+          disabled={!selected.length || !sourceId || busy}
           className="w-full bg-[#50fa7b] text-[#282a36] rounded-lg py-2.5 text-sm font-semibold active:opacity-80 disabled:opacity-40"
         >
           {busy
             ? "Adding…"
+            : !sourceId
+            ? "Choose a source first"
             : `Add ${selected.length} pick${selected.length === 1 ? "" : "s"}`}
         </button>
       )}

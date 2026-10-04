@@ -52,6 +52,45 @@ function shiftDays(days: number): string {
 }
 
 /**
+ * Source matching is done in code, not by the model.
+ *
+ * FxTwitter hands us the author handle verbatim and the source list comes
+ * straight out of settings, so this is an exact string comparison — yet asking
+ * the model to do it alongside reading 16 props off a graphic produced a 0/8
+ * miss rate on a post whose author (@MoneyMandrell) matched a source name
+ * character for character. Deterministic work belongs in deterministic code.
+ *
+ * Compares case-insensitively and ignores a leading @, so a source saved as
+ * "@MoneyMandrell", "MoneyMandrell", or "moneymandrell" all match the post.
+ */
+function normalizeHandle(s: string): string {
+  return s.trim().toLowerCase().replace(/^@+/, "");
+}
+
+function buildSourceIndex(sources: SourceRef[]): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const src of sources) {
+    if (src.name) index.set(normalizeHandle(src.name), src.id);
+    for (const h of src.handles ?? []) {
+      if (h) index.set(normalizeHandle(h), src.id);
+    }
+  }
+  return index;
+}
+
+function resolveSourceId(
+  index: Map<string, string>,
+  ...candidates: Array<string | null | undefined>
+): string | null {
+  for (const c of candidates) {
+    if (!c) continue;
+    const hit = index.get(normalizeHandle(c));
+    if (hit) return hit;
+  }
+  return null;
+}
+
+/**
  * Pick labels use the player's last name alone ("Dobbins TD"), which is
  * unambiguous right up until one cheat sheet lists two players who share a
  * surname. Only in that case, prefix a first initial ("K. Williams o55.5 RuY")
@@ -225,6 +264,8 @@ Deno.serve(async (req: Request) => {
       }),
     );
 
+    const sourceIndex = buildSourceIndex(sources);
+
     // NFL week runs Thu–Mon and people tweet Sunday picks midweek, so the
     // window is a week-plus rather than a couple of days. ~16 games either way.
     const from = shiftDays(-1);
@@ -252,7 +293,12 @@ Deno.serve(async (req: Request) => {
         sport: "NFL", // hardcoded: this pipeline is NFL-only
         strength: pick.strength ?? "normal",
         gameId: pick.gameId ?? null,
-        sourceId: pick.sourceId ?? null,
+        // Code first; the model's guess is only a fallback for a handle it
+        // read inside the graphic that FxTwitter never saw.
+        sourceId:
+          resolveSourceId(sourceIndex, pick.sourceNameRaw, row.author_handle) ??
+          pick.sourceId ??
+          null,
         sourceNameRaw: pick.sourceNameRaw ?? row.author_handle ?? null,
         isPlayerProp: Boolean(pick.isPlayerProp),
       };
