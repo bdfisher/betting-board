@@ -3,7 +3,7 @@ import { AlertTriangle, Check, Trash2, X } from "lucide-react";
 import { markDismissed, signedImageUrl } from "./services/inboxApi";
 
 // Review sheet for picks the ingest-pick edge function extracted from shared
-// tweets and screenshots. Nothing here writes to the board directly — accepting
+// tweets, articles, and screenshots. Nothing here writes to the board directly — accepting
 // hands picks back to App.jsx, which runs them through the same persistBoard
 // path as every other mutation.
 //

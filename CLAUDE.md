@@ -39,6 +39,7 @@ supabase/
   functions/ingest-pick/
     index.ts       — HTTP handler (Deno), auth, orchestration
     fxtwitter.ts   — tweet URL → text + media
+    article.ts     — article URL → text + site name
     espn.ts        — player prop → current team → board game
     extract.ts     — Gemini call, JSON schema, system prompt
 ```
@@ -216,9 +217,11 @@ In `App.jsx`, `importGamesFromApi(newGames)` deduplicates by `sport + label` bef
 
 ---
 
-## Pick Ingestion (share a tweet → Inbox)
+## Pick Ingestion (share a tweet or article → Inbox)
 
-An iOS Shortcut shares a tweet URL or screenshot to a Supabase Edge Function, which extracts the pick(s) and stages them for review. **NFL only.** Full setup in [`supabase/README.md`](supabase/README.md).
+An iOS Shortcut (or the Add tab's import field) sends a tweet URL, article URL, or screenshot to a Supabase Edge Function, which extracts the pick(s) and stages them for review. **NFL only.**
+
+Any URL that isn't an X permalink is treated as a picks article (Action Network, Covers, Rotowire, …): `article.ts` fetches the server-rendered HTML and strips it to text. **An article's source is always the site**, never the individual writers — matched against sources by `og:site_name`/hostname, so a source named "Covers" matches "Covers.com". Full setup in [`supabase/README.md`](supabase/README.md).
 
 **The architectural constraint:** nothing in this pipeline writes `boards.board`. `persistBoard` rewrites that entire blob from in-memory state on every mutation and the app only reads it on mount, so an external writer would be silently clobbered by the next tap. Extracted picks land in a separate `pick_inbox` table; they only become board data when you tap Accept, which runs them through `acceptInboxPicks` → the normal `persistBoard` path.
 

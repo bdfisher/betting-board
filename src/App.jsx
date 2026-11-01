@@ -2364,11 +2364,11 @@ export default function BetBoard() {
         {activeTab === "add" && (
           <div className="space-y-4">
 
-            {/* Paste a post URL — extracts the picks into the Inbox for review.
+            {/* Paste a post or article URL — extracts the picks into the Inbox for review.
                 NFL only; a cheat-sheet post can yield 20+ props. */}
             <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
               <label className="text-xs uppercase tracking-wide text-[#6272a4]">
-                Import from a post
+                Import from a post or article
               </label>
               <div className="flex gap-2">
                 <input
@@ -2378,7 +2378,7 @@ export default function BetBoard() {
                   onChange={(e) => { setIngestUrlText(e.target.value); setIngestStatus(null); }}
                   onKeyDown={(e) => { if (e.key === "Enter") runIngest(); }}
                   autoCorrect="off" spellCheck={false} autoComplete="off"
-                  placeholder="Paste x.com link…"
+                  placeholder="Paste an X post or article link…"
                   className="flex-1 min-w-0 bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2.5 text-sm placeholder-[#6272a4]"
                 />
                 <button

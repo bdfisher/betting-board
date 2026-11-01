@@ -1,4 +1,4 @@
-# Tweet → Pick ingestion
+# Tweet / Article → Pick ingestion
 
 Paste a post URL into the Add tab (or share one from your phone); the picks show
 up in the app's Inbox waiting for approval.
@@ -8,7 +8,8 @@ Add tab "Import from a post"   ·or·   iOS Share Sheet (optional)
       │  POST — session JWT, or x-ingest-token for the Shortcut
       ▼
 Edge Function  ingest-pick
-      ├─ URL   → api.fxtwitter.com → text + media
+      ├─ X URL → api.fxtwitter.com → text + media
+      ├─ other URL → fetch article HTML → text  (r.jina.ai fallback); source = the site
       ├─ image → Supabase Storage + base64 to the model
       ├─ reads boards.settings (sources) + boards.board (this week's NFL games)
       ├─ Gemini → picks[]
@@ -196,6 +197,7 @@ is *arrive needing attention* over *arrive confidently wrong*.
 |---|---|
 | `functions/ingest-pick/index.ts` | HTTP handler, auth, orchestration, row insert |
 | `functions/ingest-pick/fxtwitter.ts` | tweet URL → text + media |
+| `functions/ingest-pick/article.ts` | article URL → text + site name |
 | `functions/ingest-pick/espn.ts` | player prop → team → board game |
 | `functions/ingest-pick/extract.ts` | Gemini call, JSON schema, system prompt |
 | `migrations/20261003_pick_inbox.sql` | table, RLS, storage bucket |

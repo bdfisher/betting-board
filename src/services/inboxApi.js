@@ -1,6 +1,6 @@
 import { supabase, isSupabaseConfigured } from "../supabaseClient";
 
-// Reads the pick_inbox staging table — picks extracted from tweets/screenshots
+// Reads the pick_inbox staging table — picks extracted from tweets/articles/screenshots
 // by the ingest-pick edge function, waiting to be reviewed.
 //
 // These go straight through the authenticated supabase client rather than
@@ -54,7 +54,7 @@ export async function signedImageUrl(path, expiresInSeconds = 3600) {
 }
 
 /**
- * Sends a tweet/post URL to the ingest-pick edge function, which extracts the
+ * Sends a tweet or article URL to the ingest-pick edge function, which extracts the
  * picks and stages them in pick_inbox.
  *
  * `functions.invoke` attaches the signed-in user's JWT, and the function

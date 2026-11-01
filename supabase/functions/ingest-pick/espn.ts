@@ -7,6 +7,10 @@
 // confidence. ESPN returns current affiliation, so we look it up live and let
 // the model only read the name off the post.
 //
+// This is not hypothetical: on a real run the model warned that a graphic
+// listing George Pickens under Dallas was an error. Pickens plays for Dallas.
+// The lookup overrode it and filed the pick correctly.
+//
 // Two ESPN endpoints, both unauthenticated GETs like the rest of the app:
 //   1. search  — fuzzy name → candidates with current team. Handles nicknames
 //                well ("CMC" finds Christian McCaffrey), but indexes retired

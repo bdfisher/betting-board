@@ -1,5 +1,5 @@
-// POST endpoint that turns a shared post (tweet URL, screenshot, or raw text)
-// into NFL picks staged in pick_inbox for review in the app.
+// POST endpoint that turns a shared post (tweet URL, article URL, screenshot,
+// or raw text) into NFL picks staged in pick_inbox for review in the app.
 //
 // Two callers: the app's "Import from a post" field, which authenticates with
 // the signed-in user's JWT, and the optional iOS Shortcut, which can't hold a
@@ -7,7 +7,8 @@
 // block below. Runs with verify_jwt disabled so the Shortcut path can work.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
-import { fetchImageAsBase64, resolveTweet } from "./fxtwitter.ts";
+import { fetchImageAsBase64, parseStatusId, resolveTweet } from "./fxtwitter.ts";
+import { resolveArticle } from "./article.ts";
 import { type BoardGame, resolvePlayerProp } from "./espn.ts";
 import { type ExtractedPick, extractPicks, type SourceRef } from "./extract.ts";
 
@@ -67,12 +68,27 @@ function normalizeHandle(s: string): string {
   return s.trim().toLowerCase().replace(/^@+/, "");
 }
 
+/**
+ * Looser second key, for site names: a source saved as "Covers" should match
+ * og:site_name "Covers.com", and "ActionNetwork" should match "Action Network".
+ * Drops a leading "the", a TLD, and everything that isn't a letter or digit.
+ */
+function compactName(s: string): string {
+  return normalizeHandle(s)
+    .replace(/^www\./, "")
+    .replace(/^the\s+/, "")
+    .replace(/\.(com|net|org|io|co)$/, "")
+    .replace(/[^a-z0-9]/g, "");
+}
+
 function buildSourceIndex(sources: SourceRef[]): Map<string, string> {
   const index = new Map<string, string>();
   for (const src of sources) {
-    if (src.name) index.set(normalizeHandle(src.name), src.id);
-    for (const h of src.handles ?? []) {
-      if (h) index.set(normalizeHandle(h), src.id);
+    for (const n of [src.name, ...(src.handles ?? [])]) {
+      if (!n) continue;
+      index.set(normalizeHandle(n), src.id);
+      // Exact keys win: don't let a compact form shadow another source's name.
+      if (!index.has(compactName(n))) index.set(compactName(n), src.id);
     }
   }
   return index;
@@ -84,7 +100,7 @@ function resolveSourceId(
 ): string | null {
   for (const c of candidates) {
     if (!c) continue;
-    const hit = index.get(normalizeHandle(c));
+    const hit = index.get(normalizeHandle(c)) ?? index.get(compactName(c));
     if (hit) return hit;
   }
   return null;
@@ -204,9 +220,29 @@ Deno.serve(async (req: Request) => {
   try {
     const images: Array<{ data: string; mimeType: string }> = [];
     const extraWarnings: string[] = [];
+    let article: { site: string | null; hostLabel: string | null; title: string | null; publishedAt: string | null } | null =
+      null;
 
     // ---- 1. resolve the input ----------------------------------------------
-    if (body.url) {
+    // Anything that isn't an X permalink is treated as an article.
+    if (body.url && !parseStatusId(body.url)) {
+      const a = await resolveArticle(body.url);
+      article = { site: a.siteName, hostLabel: a.hostLabel, title: a.title, publishedAt: a.publishedAt };
+      // Title first: the inbox card shows the opening lines of raw_text.
+      row.raw_text = a.text ? [a.title, a.text].filter(Boolean).join("\n\n") : null;
+      row.author_handle = a.siteName;
+      row.source_url = a.permalink;
+      if (a.error) row.error = a.error;
+
+      // Sharing last week's article by mistake is easy, and its players are
+      // probably on this week's board too — so the picks would look plausible.
+      const published = a.publishedAt ? Date.parse(a.publishedAt) : NaN;
+      if (Number.isFinite(published) && Date.now() - published > 6 * 86_400_000) {
+        extraWarnings.push(
+          `Article was published ${centralDateISO(new Date(published))} — make sure these are this week's picks.`,
+        );
+      }
+    } else if (body.url) {
       const tweet = await resolveTweet(body.url);
       row.raw_text = tweet.text;
       row.author_handle = tweet.authorHandle;
@@ -281,9 +317,15 @@ Deno.serve(async (req: Request) => {
       sources,
       games: nflGames.map((g) => ({ id: g.id, label: g.label, date: g.date })),
       authorHandle: row.author_handle,
+      article: article ?? undefined,
     });
     row.model = model;
     row.author_handle = row.author_handle ?? extraction.authorHandle;
+
+    // An article's picks all belong to the site, whoever wrote each section.
+    const articleSourceId = article
+      ? resolveSourceId(sourceIndex, article.site, article.hostLabel)
+      : null;
 
     // ---- 3b. resolve player props against live rosters -----------------------
     const picks: ExtractedPick[] = [];
@@ -294,12 +336,14 @@ Deno.serve(async (req: Request) => {
         strength: pick.strength ?? "normal",
         gameId: pick.gameId ?? null,
         // Code first; the model's guess is only a fallback for a handle it
-        // read inside the graphic that FxTwitter never saw.
-        sourceId:
-          resolveSourceId(sourceIndex, pick.sourceNameRaw, row.author_handle) ??
-          pick.sourceId ??
-          null,
-        sourceNameRaw: pick.sourceNameRaw ?? row.author_handle ?? null,
+        // read inside the graphic that FxTwitter never saw. Articles skip the
+        // model entirely — a writer's byline is never the source.
+        sourceId: article
+          ? articleSourceId
+          : resolveSourceId(sourceIndex, pick.sourceNameRaw, row.author_handle) ??
+            pick.sourceId ??
+            null,
+        sourceNameRaw: article ? row.author_handle : pick.sourceNameRaw ?? row.author_handle ?? null,
         isPlayerProp: Boolean(pick.isPlayerProp),
       };
 
@@ -327,7 +371,14 @@ Deno.serve(async (req: Request) => {
     // Labels carry last names only ("Dobbins TD"), which reads fine until one
     // post has two players sharing a surname — Kyren vs Javonte Williams.
     // Where that happens, and only there, prefix a first initial.
-    disambiguateSurnames(picks);
+    disambiguateSurnames(picks as unknown as Array<Record<string, unknown>>);
+
+    // A plus-form line already means over, so "o30+ RuY" → "30+ RuY". The
+    // prompt asks for this too; this catches the model slipping back to the
+    // o/u habit the rest of the label rules drill in.
+    for (const p of picks) {
+      if (p.label) p.label = p.label.replace(/\bo(\d+(?:\.\d+)?\+)/gi, "$1");
+    }
 
     row.extracted = {
       picks,

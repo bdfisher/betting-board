@@ -1,4 +1,4 @@
-// Gemini call: tweet text and/or image in, structured picks out.
+// Gemini call: post text and/or images, or article text, in; structured picks out.
 //
 // Model id is env-overridable so it can be swapped without a code change.
 // Free tier covers Flash models at ~1500 requests/day, far more than this needs.
@@ -90,9 +90,9 @@ export const EXTRACTION_SCHEMA = {
   required: ["isBettingContent", "picks", "warnings"],
 };
 
-const SYSTEM_PROMPT = `You extract NFL betting picks from social media posts for a personal bet-tracking app.
+const SYSTEM_PROMPT = `You extract NFL betting picks from social media posts and betting articles for a personal bet-tracking app.
 
-You receive a post's text and/or an image of it, plus the user's list of handicapper sources and the NFL games currently on their board. Return every distinct bet being recommended.
+You receive a post's text and/or an image of it — or the text of a picks article — plus the user's list of handicapper sources and the NFL games currently on their board. Return every distinct bet being recommended.
 
 ## What counts
 Return a pick for each bet the author is recommending. A parlay is ONE pick whose label names all legs. If the post is a recap, a brag about a past result, a retweet with no new bet, or isn't about betting at all, set isBettingContent false and return an empty picks array.
@@ -123,7 +123,8 @@ unusually long: Jaxon Smith-Njigba is "JSN". Do not shorten an ordinary
 surname — Christian McCaffrey is "McCaffrey", never "CMC".
 
 LINE — o or u fused to the number with no space: o89.5, u100.5. Never write
-"Over", "Under", "+", or "-" here.
+"Over", "Under", "+", or "-" here — except for a plus-form line (below), which
+keeps its trailing + and takes no o.
 
 Anytime-touchdown props carry NO line at all. Just "Dobbins TD". Not
 "Dobbins o0.5 TD".
@@ -151,7 +152,8 @@ the shortest clear abbreviation you can AND add a warning naming the stat, so a
 proper code can be added later.
 
 Keep the author's number exactly — never invent or move a half point. If the
-graphic says "250+", write "o250+ PY", not "o249.5 PY".
+graphic says "250+", write "250+ PY" — not "o249.5 PY", and no "o" in front:
+the + already means over.
 
 NEVER put odds in the label.
 
@@ -178,16 +180,42 @@ How hard the author is banging the table on THIS bet:
 - "potd"   — "play of the day", "POTD", "best bet", "hammer", "max bet", "lock of the week"
 Use "normal" unless the language is clearly one of the others.
 
-## gameId and sourceId
-Both must be copied from the lists provided in the user message, or omitted. Never invent an id. Match sources on name or handle — a post from "@SharpEdges" maps to a source named "Sharp Edges" or one listing that handle. If you can't confidently match, omit sourceId and put what the post said in sourceNameRaw.
+## sourceNameRaw and sourceId
+Put the handle or name the picks are credited to in sourceNameRaw, exactly as written.
 
-For non-prop picks, match gameId by team names. Omit it if no supplied game fits.
+The post's own author is matched to the user's source list in code, so you do NOT need to find sourceId for it. Only set sourceId when the GRAPHIC ITSELF credits a different handicapper than the account that posted it, and that name matches one in the supplied list. Otherwise omit it.
+
+## gameId
+For non-prop picks, copy gameId from the supplied games list by matching team names. Never invent an id. Omit it if no supplied game fits. For player props always omit it.
 
 ## confidence
 0 to 1, for how sure you are you read the bet correctly — not how good the bet is. Low confidence for blurry images or ambiguous phrasing.
 
 ## warnings
-Note anything the user should eyeball: unreadable text, a bet you partially parsed, a sport that isn't NFL, more picks visible than you could resolve.`;
+Note anything the user should eyeball: unreadable text, a bet you partially parsed, a sport that isn't NFL, a stat with no code in the list above. Do not warn about team assignments.
+
+## Articles
+When the input has contentType "article", it is the text of a picks article from a betting site (Action Network, Covers, Rotowire, …), scraped from HTML. Everything above still applies; these rules override where they differ.
+
+The source is the SITE, not the writers. Ignore bylines and "Analyst:" credits — leave sourceId and sourceNameRaw empty on every pick; the site is attached in code.
+
+Articles state each pick more than once — a summary table up top, then a section per game; or a heading followed by a "Pick:" line repeating it. Return each distinct bet ONCE.
+
+Only the article's recommendations count. Skip:
+- props quoted only as context ("he went over 80.5 last week")
+- last week's results and record recaps
+- links and teasers to other articles ("Check out our full Ravens vs. Bills predictions!")
+- sportsbook promos and bonus offers
+
+The pick line is usually spelled out: "Zay Flowers Over 81.5 Receiving Yards (-114)" is "Flowers o81.5 ReY". "Josh Allen 30+ rushing yards" is "Allen 30+ RuY" — keep the plus form with no "o", per the label rules. Drop the odds and the book name ("(-115 BetMGM)").
+
+Read the team the article attaches to a player ("Cardinals RB Jeremiyah Love") into statedTeam — that is reading, not recalling.
+
+strength — headings like "Best Prop Pick", "Best Bet", or "Pick" are how the site labels EVERY pick in the piece, so they mean "normal". Use "potd" only when the article singles one bet out above the rest ("my favorite play of the week", "the best of the bunch", a separate "Best Bet of the Day" callout). "lean" when the writer hedges a specific pick.
+
+Conditional picks ("if Pickens is inactive, play Flournoy") — extract the bet, mark it normal, and add a warning spelling out the condition so the user can decide.
+
+isBettingContent is false only if the article contains no current recommendations at all (pure news, injury report, or a results recap).`;
 
 export async function extractPicks(opts: {
   text: string | null;
@@ -195,6 +223,8 @@ export async function extractPicks(opts: {
   sources: SourceRef[];
   games: Array<{ id: string; label: string; date?: string }>;
   authorHandle: string | null;
+  /** Set when the text is a scraped article rather than a post. */
+  article?: { site: string | null; title: string | null; publishedAt: string | null };
 }): Promise<{ extraction: Extraction; model: string }> {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
@@ -202,6 +232,14 @@ export async function extractPicks(opts: {
   const ai = new GoogleGenAI({ apiKey });
 
   const context = {
+    ...(opts.article
+      ? {
+        contentType: "article",
+        site: opts.article.site,
+        articleTitle: opts.article.title,
+        publishedAt: opts.article.publishedAt,
+      }
+      : { contentType: "post" }),
     postText: opts.text ?? "(no text — read the image)",
     postAuthor: opts.authorHandle ?? "(unknown)",
     sources: opts.sources.map((s) => ({
