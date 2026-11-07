@@ -1,11 +1,11 @@
 # Tweet / Article → Pick ingestion
 
-Paste a post URL into the Add tab (or share one from your phone); the picks show
-up in the app's Inbox waiting for approval.
+Paste a post URL into the Add tab; the picks show up in the app's Inbox waiting
+for approval.
 
 ```
-Add tab "Import from a post"   ·or·   iOS Share Sheet (optional)
-      │  POST — session JWT, or x-ingest-token for the Shortcut
+Add tab "Import from a post"
+      │  POST — signed-in session JWT
       ▼
 Edge Function  ingest-pick
       ├─ X URL → api.fxtwitter.com → text + media
@@ -51,8 +51,6 @@ Set in the dashboard → **Edge Functions → Secrets**
 | Name | Value |
 |---|---|
 | `GEMINI_API_KEY` | from AI Studio |
-| `INGEST_TOKEN` | random string, only needed for the optional Shortcut |
-| `INGEST_USER_ID` | your auth UUID (Authentication → Users) |
 | `GEMINI_MODEL` | optional, overrides the default model |
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
@@ -68,56 +66,14 @@ supabase login && supabase link --project-ref zeafyxuumutysmsdmwrd
 supabase functions deploy ingest-pick --no-verify-jwt
 ```
 
-`--no-verify-jwt` is required. It does **not** make the function public: the
-handler does its own auth, accepting either a signed-in user's JWT (the app) or
-the `x-ingest-token` secret (the Shortcut), and rejecting everything else with
-a 401. The flag only stops the platform from rejecting the Shortcut's
-session-less requests before they reach that check.
+`--no-verify-jwt` does **not** make the function public: the handler verifies
+the signed-in user's JWT itself and rejects everything else with a 401.
 
 ### 5. Smoke test
 
-```bash
-curl -X POST https://zeafyxuumutysmsdmwrd.supabase.co/functions/v1/ingest-pick \
-  -H "x-ingest-token: $INGEST_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"text":"Hammering Chiefs -3.5 tonight, thats my POTD"}'
-```
-
-Expect `{"ok":true,"picks":1,...}`. Import the current NFL week in the app first
-(Add tab → Autofill NFL week) so there are games to match against.
-
-### 6. iOS Shortcut (optional)
-
-The Add tab's "Import from a post" field covers this without any setup — it
-authenticates with your signed-in session, so no secret ships in the client.
-Build the Shortcut only if you want one-tap sharing straight from the X app
-rather than copy-link → switch app → paste.
-
-
-New shortcut named **Add Pick**. In its settings turn on *Show in Share Sheet*
-and set accepted types to **Text, URLs, Images**.
-
-| # | Action | Notes |
-|---|---|---|
-| 1 | Get Images from Input | empty when a URL was shared |
-| 2 | If *Images* has any value | |
-| 3 | → Resize Image | Longest Edge, 1568 |
-| 4 | → Base64 Encode | Line Breaks: **None** |
-| 5 | → Dictionary | `image` = Base64 Encoded, `media_type` = `image/jpeg` |
-| 6 | Otherwise | |
-| 7 | → Dictionary | `url` = Shortcut Input |
-| 8 | End If | |
-| 9 | Get Contents of URL | see below |
-| 10 | Show Notification | `Added [picks] pick(s)` |
-
-Step 9: `POST` to
-`https://zeafyxuumutysmsdmwrd.supabase.co/functions/v1/ingest-pick`,
-Headers `x-ingest-token: <your token>` and `Content-Type: application/json`,
-Request Body **JSON** = the Dictionary from step 5/7.
-
-From X: tap share on a tweet → **Add Pick**. For anything else (Discord, a text
-message, a tweet FxTwitter can't resolve) screenshot it and share the
-screenshot — step 2 branches automatically.
+Import the current NFL week in the app first (Add tab → Autofill NFL week) so
+there are games to match against, then paste a tweet URL into "Import from a
+post". The picks should appear in the Inbox banner on the Board tab.
 
 ---
 

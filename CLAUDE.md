@@ -34,7 +34,7 @@ src/
   index.css        — Tailwind base + minor globals
 
 supabase/
-  README.md        — ingestion setup: deploy, secrets, iOS Shortcut
+  README.md        — ingestion setup: deploy, secrets
   migrations/      — pick_inbox table + storage bucket
   functions/ingest-pick/
     index.ts       — HTTP handler (Deno), auth, orchestration
@@ -219,7 +219,7 @@ In `App.jsx`, `importGamesFromApi(newGames)` deduplicates by `sport + label` bef
 
 ## Pick Ingestion (share a tweet or article → Inbox)
 
-An iOS Shortcut (or the Add tab's import field) sends a tweet URL, article URL, or screenshot to a Supabase Edge Function, which extracts the pick(s) and stages them for review. Any sport: the import field has a sport dropdown (default "Auto", where the model reads the sport off the post — the Shortcut always uses Auto). A chosen sport is authoritative: it stamps every pick and limits game matching to that sport's games. Player props get the live-roster lookup below **for NFL only**; other sports' props match a game only when the post names the player's team.
+The Add tab's import field sends a tweet URL, article URL, or screenshot to a Supabase Edge Function, which extracts the pick(s) and stages them for review. Any sport: the import field has a sport dropdown (default "Auto", where the model reads the sport off the post). Choosing NFL runs the original NFL-only prompt in `extract.ts`, which reads full prop cheat sheets more reliably than the multi-sport one. A chosen sport is authoritative: it stamps every pick and limits game matching to that sport's games. Player props get the live-roster lookup below **for NFL only**; other sports' props match a game only when the post names the player's team.
 
 Any URL that isn't an X permalink is treated as a picks article (Action Network, Covers, Rotowire, …): `article.ts` fetches the server-rendered HTML and strips it to text. **An article's source is always the site**, never the individual writers — matched against sources by `og:site_name`/hostname, so a source named "Covers" matches "Covers.com". Full setup in [`supabase/README.md`](supabase/README.md).
 
@@ -261,7 +261,7 @@ VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxxxxxxxxxxxxxxxxxxx
 
 Get the values from Supabase dashboard → Project Settings → API Keys.
 
-The `ingest-pick` Edge Function has its own separate secrets (`GEMINI_API_KEY`, `INGEST_TOKEN`, `INGEST_USER_ID`, optional `GEMINI_MODEL`), set with `supabase secrets set` rather than in `.env` — they are server-side only and must never reach the client bundle. See [`supabase/README.md`](supabase/README.md).
+The `ingest-pick` Edge Function has its own separate secrets (`GEMINI_API_KEY`, optional `GEMINI_MODEL`), set with `supabase secrets set` rather than in `.env` — they are server-side only and must never reach the client bundle. See [`supabase/README.md`](supabase/README.md).
 
 ---
 

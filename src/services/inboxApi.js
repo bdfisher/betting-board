@@ -59,8 +59,7 @@ export async function signedImageUrl(path, expiresInSeconds = 3600) {
  *
  * `functions.invoke` attaches the signed-in user's JWT, and the function
  * derives the account from it — so no shared ingest secret ships in the client
- * bundle. (The iOS Shortcut, which can't hold a session, uses a secret header
- * instead; the function accepts either.)
+ * bundle.
  *
  * `sport` is optional; when set, every extracted pick is filed under it.
  *

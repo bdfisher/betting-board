@@ -2,10 +2,9 @@
 // or raw text) into picks staged in pick_inbox for review in the app. Any
 // sport extracts; only NFL player props get the live-roster lookup.
 //
-// Two callers: the app's "Import from a post" field, which authenticates with
-// the signed-in user's JWT, and the optional iOS Shortcut, which can't hold a
-// session and uses a shared secret header against a pinned user. See the auth
-// block below. Runs with verify_jwt disabled so the Shortcut path can work.
+// Called by the app's "Import from a post" field, which authenticates with the
+// signed-in user's JWT. The handler verifies that JWT itself (see the auth
+// block below), so it's deployed with verify_jwt disabled.
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImageAsBase64, parseStatusId, resolveTweet } from "./fxtwitter.ts";
@@ -34,7 +33,7 @@ interface RequestBody {
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type, x-ingest-token",
+    "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Max-Age": "86400",
 };
@@ -156,26 +155,14 @@ Deno.serve(async (req: Request) => {
   );
 
   // ---- auth ----------------------------------------------------------------
-  // Two callers, two mechanisms:
-  //
-  //   1. The app itself, which has a real signed-in session. Derive the user
-  //      from their JWT — that way no shared secret has to ship in the client
-  //      bundle, and the row lands on whichever account is signed in.
-  //   2. The iOS Shortcut, which can't hold a Supabase session. Falls back to
-  //      a shared secret header and a single pinned user.
+  // Derive the user from the signed-in session's JWT — no shared secret ships
+  // in the client bundle, and the row lands on whichever account is signed in.
   let userId: string | null = null;
 
   const authz = req.headers.get("Authorization");
   if (authz?.startsWith("Bearer ")) {
     const { data } = await supabase.auth.getUser(authz.slice(7));
     userId = data?.user?.id ?? null;
-  }
-
-  if (!userId) {
-    const expected = Deno.env.get("INGEST_TOKEN");
-    if (expected && req.headers.get("x-ingest-token") === expected) {
-      userId = Deno.env.get("INGEST_USER_ID") ?? null;
-    }
   }
 
   if (!userId) return json({ error: "Unauthorized" }, 401);
