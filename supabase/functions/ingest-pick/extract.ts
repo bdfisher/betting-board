@@ -7,8 +7,13 @@ import { GoogleGenAI } from "npm:@google/genai@2.27.0";
 
 const MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
 
+// Mirrors LEAGUES in App.jsx — a pick's sport groups it on the board and picks
+// which per-sport tier its source scores at.
+export const SPORTS = ["NFL", "NCAAF", "NCAAB", "NHL", "NBA", "MLS", "EPL", "Champions League", "MLB", "Other"];
+
 export interface ExtractedPick {
   label: string;
+  sport?: string | null;
   matchup?: string | null;
   gameId?: string | null;
   sourceId?: string | null;
@@ -61,6 +66,7 @@ export const EXTRACTION_SCHEMA = {
             description:
               'Exact format per the system prompt: "McCaffrey o89.5 RuY", "Dobbins TD", "Chiefs -3.5"',
           },
+          sport: { type: "string", enum: SPORTS },
           matchup: { type: "string", description: 'Teams as written, e.g. "KC @ BUF"' },
           gameId: {
             type: "string",
@@ -83,28 +89,33 @@ export const EXTRACTION_SCHEMA = {
               "Team printed on the graphic next to this player, if visible. Read only — never recall.",
           },
         },
-        required: ["label", "strength", "isPlayerProp", "confidence"],
+        required: ["label", "sport", "strength", "isPlayerProp", "confidence"],
       },
     },
   },
   required: ["isBettingContent", "picks", "warnings"],
 };
 
-const SYSTEM_PROMPT = `You extract NFL betting picks from social media posts and betting articles for a personal bet-tracking app.
+const SYSTEM_PROMPT = `You extract sports betting picks from social media posts and betting articles for a personal bet-tracking app.
 
-You receive a post's text and/or an image of it — or the text of a picks article — plus the user's list of handicapper sources and the NFL games currently on their board. Return every distinct bet being recommended.
+You receive a post's text and/or an image of it — or the text of a picks article — plus the user's list of handicapper sources and the games currently on their board (each tagged with its sport). Return every distinct bet being recommended.
 
 ## What counts
 Return a pick for each bet the author is recommending. A parlay is ONE pick whose label names all legs. If the post is a recap, a brag about a past result, a retweet with no new bet, or isn't about betting at all, set isBettingContent false and return an empty picks array.
 
-This app tracks NFL only. If a post is clearly about another sport, set isBettingContent false and add a warning saying so. Do not guess at a sport.
+## sport
+Set sport on every pick, from this list: NFL, NCAAF (college football), NCAAB (men's college basketball), NHL, NBA, MLS, EPL, Champions League, MLB, Other.
+
+Decide it from what the post says — a title like "Week 10 College Football Top Picks", a URL path like "/ncaaf/", the teams named. College and pro football share a calendar and a vocabulary, so look for that explicit signal: Alabama, Ohio State, BYU are NCAAF; Chiefs, Bills, Eagles are NFL. If a pick matches a supplied game, use that game's sport. Use "Other" only when nothing tells you.
+
+When the input carries a top-level "sport", the user chose it before importing: use it on every pick and don't second-guess it.
 
 ## Cheat sheets — the common case
 Most posts here are prop GRAPHICS, not text. A single post often carries 2-4 images, each a page of a cheat sheet ("Passing", "Rushing", "Receiving", "TD Scorers"), with 4-16 props per page. The post's own text is usually just promo ("Save this sheet for Sunday", a discount code) and carries no picks at all.
 
 Extract EVERY prop you can read, across EVERY image. Twenty or more picks from one post is normal and correct. Do not summarize, sample, or stop early. If a page is too low-resolution to read reliably, add a warning saying which one rather than guessing at the numbers.
 
-Section headers give you the stat type — a player under "RUSHING YARDS" showing "OVER 69.5" is "o69.5 RuY".
+Most cheat sheets are NFL. Section headers give you the stat type — a player under "RUSHING YARDS" showing "OVER 69.5" is "o69.5 RuY".
 
 ## label — follow this format exactly
 
@@ -147,9 +158,11 @@ PTD is a quarterback's passing-touchdown total and DOES carry one
 A period qualifier goes in front of the code the way "1Q Rec" does — first-half
 passing yards would be "1H PY".
 
-If a prop's stat is still not covered (tackles, sacks, kicking points), write
-the shortest clear abbreviation you can AND add a warning naming the stat, so a
-proper code can be added later.
+If a football prop's stat is still not covered (tackles, sacks, kicking points),
+write the shortest clear abbreviation you can AND add a warning naming the stat,
+so a proper code can be added later. Other sports use their common short forms
+without a warning: "Brunson o27.5 Pts", "Jokic o12.5 Reb", "McDavid o3.5 SOG",
+"Skubal o7.5 K".
 
 Keep the author's number exactly — never invent or move a half point. If the
 graphic says "250+", write "250+ PY" — not "o249.5 PY", and no "o" in front:
@@ -158,12 +171,17 @@ the + already means over.
 NEVER put odds in the label.
 
 Team and game bets keep their natural form: "Chiefs -3.5", "Bills ML",
-"Bills/Chiefs u47.5".
+"Bills/Chiefs u47.5". A game total uses the two teams as the post names them,
+in the order it lists them: "Air Force vs. Army — Over 46.5" is
+"Air Force/Army o46.5". College teams go by school name, never mascot:
+"LSU -5.5", not "Tigers -5.5".
 
 ## Player props
 When a pick is about one player's statistical line, set isPlayerProp true and put the player's name in playerName EXACTLY as the post writes it ("JK Dobbins", "Dobbins", "CMC").
 
-Then LEAVE gameId EMPTY. A separate step resolves the player against live roster data.
+Then LEAVE gameId EMPTY for NFL props. A separate step resolves the player against live roster data.
+
+Other sports have no roster step. For them, set gameId only when the post itself names the player's team (statedTeam) and that team is in a supplied game; otherwise leave it empty.
 
 There is one thing you may report about teams and one you may not:
 - READING is fine. Pick cards nearly always print the team above the player ("GREEN BAY PACKERS"). If you can see it, put it in statedTeam. It is decisive for telling Kyren Williams from Javonte Williams.
@@ -186,13 +204,13 @@ Put the handle or name the picks are credited to in sourceNameRaw, exactly as wr
 The post's own author is matched to the user's source list in code, so you do NOT need to find sourceId for it. Only set sourceId when the GRAPHIC ITSELF credits a different handicapper than the account that posted it, and that name matches one in the supplied list. Otherwise omit it.
 
 ## gameId
-For non-prop picks, copy gameId from the supplied games list by matching team names. Never invent an id. Omit it if no supplied game fits. For player props always omit it.
+For non-prop picks, copy gameId from the supplied games list by matching team names. Board labels use full ESPN names in "Away @ Home" order ("BYU Cougars @ Utah Utes"); posts often write "BYU vs. Utah" or a nickname, and the order of the two teams doesn't matter. Only match a game of the same sport. Never invent an id. Omit it if no supplied game fits — the app warns the user to import that slate.
 
 ## confidence
 0 to 1, for how sure you are you read the bet correctly — not how good the bet is. Low confidence for blurry images or ambiguous phrasing.
 
 ## warnings
-Note anything the user should eyeball: unreadable text, a bet you partially parsed, a sport that isn't NFL, a stat with no code in the list above. Do not warn about team assignments.
+Note anything the user should eyeball: unreadable text, a bet you partially parsed, a football stat with no code in the list above. Do not warn about team assignments, and do not warn that a game is missing from the board — code does that.
 
 ## Articles
 When the input has contentType "article", it is the text of a picks article from a betting site (Action Network, Covers, Rotowire, …), scraped from HTML. Everything above still applies; these rules override where they differ.
@@ -211,7 +229,9 @@ The pick line is usually spelled out: "Zay Flowers Over 81.5 Receiving Yards (-1
 
 Read the team the article attaches to a player ("Cardinals RB Jeremiyah Love") into statedTeam — that is reading, not recalling.
 
-strength — headings like "Best Prop Pick", "Best Bet", or "Pick" are how the site labels EVERY pick in the piece, so they mean "normal". Use "potd" only when the article singles one bet out above the rest ("my favorite play of the week", "the best of the bunch", a separate "Best Bet of the Day" callout). "lean" when the writer hedges a specific pick.
+Roundup articles ("Top Picks for Saturday: Best Bet From Every Game") give each game a headline pick — "Top pick: Utah -4.5" — and often a secondary in the write-up: "Paul also likes the Over 54.5", "leans Air Force to win outright". Return the headline pick as "normal" and each secondary as "lean". A secondary total needs its number — skip a bare "also likes the Over" that never states one. A moneyline secondary doesn't: "leans Air Force to win outright" is "Air Force ML", lean.
+
+strength — headings like "Best Prop Pick", "Best Bet", "Top pick", or "Pick" are how the site labels EVERY pick in the piece, so they mean "normal". Use "potd" only when the article singles one bet out above the rest ("my favorite play of the week", "the best of the bunch", a separate "Best Bet of the Day" callout). "lean" when the writer hedges a specific pick.
 
 Conditional picks ("if Pickens is inactive, play Flournoy") — extract the bet, mark it normal, and add a warning spelling out the condition so the user can decide.
 
@@ -221,10 +241,12 @@ export async function extractPicks(opts: {
   text: string | null;
   images: Array<{ data: string; mimeType: string }>;
   sources: SourceRef[];
-  games: Array<{ id: string; label: string; date?: string }>;
+  games: Array<{ id: string; label: string; sport: string; date?: string }>;
   authorHandle: string | null;
   /** Set when the text is a scraped article rather than a post. */
-  article?: { site: string | null; title: string | null; publishedAt: string | null };
+  article?: { site: string | null; title: string | null; publishedAt: string | null; url?: string | null };
+  /** Chosen by the user before importing — overrides detection. */
+  sport?: string | null;
 }): Promise<{ extraction: Extraction; model: string }> {
   const apiKey = Deno.env.get("GEMINI_API_KEY");
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
@@ -237,9 +259,11 @@ export async function extractPicks(opts: {
         contentType: "article",
         site: opts.article.site,
         articleTitle: opts.article.title,
+        articleUrl: opts.article.url ?? null,
         publishedAt: opts.article.publishedAt,
       }
       : { contentType: "post" }),
+    ...(opts.sport ? { sport: opts.sport } : {}),
     postText: opts.text ?? "(no text — read the image)",
     postAuthor: opts.authorHandle ?? "(unknown)",
     sources: opts.sources.map((s) => ({
@@ -247,7 +271,7 @@ export async function extractPicks(opts: {
       name: s.name,
       ...(s.handles?.length ? { handles: s.handles } : {}),
     })),
-    nflGamesOnBoard: opts.games,
+    gamesOnBoard: opts.games,
   };
 
   const parts: Array<Record<string, unknown>> = [

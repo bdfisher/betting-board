@@ -1,5 +1,6 @@
 // POST endpoint that turns a shared post (tweet URL, article URL, screenshot,
-// or raw text) into NFL picks staged in pick_inbox for review in the app.
+// or raw text) into picks staged in pick_inbox for review in the app. Any
+// sport extracts; only NFL player props get the live-roster lookup.
 //
 // Two callers: the app's "Import from a post" field, which authenticates with
 // the signed-in user's JWT, and the optional iOS Shortcut, which can't hold a
@@ -10,7 +11,7 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 import { fetchImageAsBase64, parseStatusId, resolveTweet } from "./fxtwitter.ts";
 import { resolveArticle } from "./article.ts";
 import { type BoardGame, resolvePlayerProp } from "./espn.ts";
-import { type ExtractedPick, extractPicks, type SourceRef } from "./extract.ts";
+import { type ExtractedPick, extractPicks, type SourceRef, SPORTS } from "./extract.ts";
 
 const BUCKET = "pick-inbox";
 
@@ -22,6 +23,8 @@ interface RequestBody {
   image?: string; // base64, no data: prefix
   media_type?: string;
   text?: string;
+  /** Sport chosen in the app before importing. Absent → the model decides. */
+  sport?: string;
 }
 
 // The PWA calls this cross-origin (github.io → supabase.co), so every response
@@ -220,14 +223,19 @@ Deno.serve(async (req: Request) => {
   try {
     const images: Array<{ data: string; mimeType: string }> = [];
     const extraWarnings: string[] = [];
-    let article: { site: string | null; hostLabel: string | null; title: string | null; publishedAt: string | null } | null =
-      null;
+    let article: {
+      site: string | null;
+      hostLabel: string | null;
+      title: string | null;
+      publishedAt: string | null;
+      url: string;
+    } | null = null;
 
     // ---- 1. resolve the input ----------------------------------------------
     // Anything that isn't an X permalink is treated as an article.
     if (body.url && !parseStatusId(body.url)) {
       const a = await resolveArticle(body.url);
-      article = { site: a.siteName, hostLabel: a.hostLabel, title: a.title, publishedAt: a.publishedAt };
+      article = { site: a.siteName, hostLabel: a.hostLabel, title: a.title, publishedAt: a.publishedAt, url: a.permalink };
       // Title first: the inbox card shows the opening lines of raw_text.
       row.raw_text = a.text ? [a.title, a.text].filter(Boolean).join("\n\n") : null;
       row.author_handle = a.siteName;
@@ -303,19 +311,32 @@ Deno.serve(async (req: Request) => {
     const sourceIndex = buildSourceIndex(sources);
 
     // NFL week runs Thu–Mon and people tweet Sunday picks midweek, so the
-    // window is a week-plus rather than a couple of days. ~16 games either way.
+    // window is a week-plus rather than a couple of days. Every sport on the
+    // board goes to the model — a college football roundup needs the NCAAF
+    // slate to match against, not just the NFL one.
     const from = shiftDays(-1);
     const to = shiftDays(8);
-    const nflGames: BoardGame[] = (boardData.games ?? []).filter(
-      (g: BoardGame) => g.sport === "NFL" && (!g.date || (g.date >= from && g.date <= to)),
+    const boardGames: BoardGame[] = (boardData.games ?? []).filter(
+      (g: BoardGame) => !g.date || (g.date >= from && g.date <= to),
     );
+    const nflGames = boardGames.filter((g) => g.sport === "NFL");
+
+    // A sport chosen in the app is authoritative: it narrows the games the
+    // model matches against and stamps every pick, so a college slate can't
+    // drift onto an NFL game with the same city in it.
+    const forcedSport = body.sport && SPORTS.includes(body.sport) ? body.sport : null;
+    const candidateGames = forcedSport
+      ? boardGames.filter((g) => g.sport === forcedSport)
+      : boardGames;
+    const gamesById = new Map(boardGames.map((g) => [g.id, g]));
 
     // ---- 3. extract ---------------------------------------------------------
     const { extraction, model } = await extractPicks({
       text: row.raw_text,
       images,
       sources,
-      games: nflGames.map((g) => ({ id: g.id, label: g.label, date: g.date })),
+      games: candidateGames.map((g) => ({ id: g.id, label: g.label, sport: g.sport ?? "Other", date: g.date })),
+      sport: forcedSport,
       authorHandle: row.author_handle,
       article: article ?? undefined,
     });
@@ -329,12 +350,21 @@ Deno.serve(async (req: Request) => {
 
     // ---- 3b. resolve player props against live rosters -----------------------
     const picks: ExtractedPick[] = [];
+    // Picks that matched no board game, by sport — one warning per sport
+    // rather than one per pick.
+    const unmatched = new Map<string, number>();
     for (const pick of extraction.picks) {
+      // The model is told never to invent a gameId; this enforces it. A
+      // matched game's sport outranks the model's read of the post.
+      let game = pick.gameId ? gamesById.get(pick.gameId) : undefined;
+      if (forcedSport && game?.sport !== forcedSport) game = undefined;
+      const sport = forcedSport ?? game?.sport ??
+        (pick.sport && SPORTS.includes(pick.sport) ? pick.sport : "NFL");
       const normalized: Record<string, unknown> = {
         ...pick,
-        sport: "NFL", // hardcoded: this pipeline is NFL-only
+        sport,
         strength: pick.strength ?? "normal",
-        gameId: pick.gameId ?? null,
+        gameId: game?.id ?? null,
         // Code first; the model's guess is only a fallback for a handle it
         // read inside the graphic that FxTwitter never saw. Articles skip the
         // model entirely — a writer's byline is never the source.
@@ -347,7 +377,7 @@ Deno.serve(async (req: Request) => {
         isPlayerProp: Boolean(pick.isPlayerProp),
       };
 
-      if (pick.isPlayerProp && pick.playerName) {
+      if (pick.isPlayerProp && pick.playerName && sport === "NFL") {
         // statedTeam is a team read off the graphic, which disambiguates
         // surname collisions. It narrows the ESPN candidates; it never
         // substitutes for the lookup.
@@ -365,7 +395,17 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      picks.push(normalized as ExtractedPick);
+      if (!normalized.gameId && !normalized.resolution) {
+        unmatched.set(sport, (unmatched.get(sport) ?? 0) + 1);
+      }
+
+      picks.push(normalized as unknown as ExtractedPick);
+    }
+
+    for (const [sport, n] of unmatched) {
+      extraction.warnings.push(
+        `${n} ${sport} pick${n === 1 ? "" : "s"} didn't match a game on your board — autofill that ${sport} slate, then set the game on each.`,
+      );
     }
 
     // Labels carry last names only ("Dobbins TD"), which reads fine until one

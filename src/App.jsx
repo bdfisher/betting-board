@@ -152,6 +152,8 @@ const chipStyle = (hex) => ({ color: hex, backgroundColor: `${hex}22`, borderCol
 
 // Sports we show the spread for (favorite only); everything else shows both moneylines.
 const SPREAD_SPORTS = new Set(["NFL", "NCAAF"]);
+// Sports the import field offers. Auto lets the extractor read it off the post.
+const INGEST_SPORTS = [[null, "Auto"], ...LEAGUES.filter((l) => l !== "Other").map((l) => [l, l])];
 const fmtSpread = (n) => (n === 0 ? "PK" : n > 0 ? `+${n}` : `${n}`);
 
 // Plain matchup for the header's top line (truncatable). Falls back to the stored
@@ -997,6 +999,7 @@ export default function BetBoard() {
   const [inbox, setInbox] = useState([]);
   const [inboxOpen, setInboxOpen] = useState(false);
   const [ingestUrlText, setIngestUrlText] = useState("");
+  const [ingestSport, setIngestSport] = useState(null); // null = let the model detect it
   const [ingesting, setIngesting] = useState(false);
   const [ingestStatus, setIngestStatus] = useState(null); // { ok, message }
 
@@ -1500,7 +1503,7 @@ export default function BetBoard() {
     setIngesting(true);
     setIngestStatus(null);
     try {
-      const res = await ingestUrl(url);
+      const res = await ingestUrl(url, ingestSport);
       if (res.ok && res.picks > 0) {
         setIngestUrlText("");
         setIngestStatus({ ok: true, message: `Found ${res.picks} pick${res.picks === 1 ? "" : "s"} — review in the Inbox.` });
@@ -1527,7 +1530,9 @@ export default function BetBoard() {
       id: uid(),
       gameId: p.gameId || null,
       label: (p.label || "").trim(),
-      sport: "NFL",
+      // A matched game's sport wins; the extractor's read is the fallback, and
+      // rows from before multi-sport ingestion carry neither.
+      sport: games.find((g) => g.id === p.gameId)?.sport || p.sport || "NFL",
       sources: p.sourceId
         ? [{
             sourceId: p.sourceId,
@@ -2365,12 +2370,22 @@ export default function BetBoard() {
           <div className="space-y-4">
 
             {/* Paste a post or article URL — extracts the picks into the Inbox for review.
-                NFL only; a cheat-sheet post can yield 20+ props. */}
+                A cheat-sheet post can yield 20+ props. */}
             <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
               <label className="text-xs uppercase tracking-wide text-[#6272a4]">
                 Import from a post or article
               </label>
               <div className="flex gap-2">
+                <select
+                  value={ingestSport ?? ""}
+                  onChange={(e) => setIngestSport(e.target.value || null)}
+                  aria-label="Sport"
+                  className="flex-shrink-0 w-24 bg-[#282a36] border border-[#44475a] rounded-lg px-2 py-2.5 text-sm"
+                >
+                  {INGEST_SPORTS.map(([key, label]) => (
+                    <option key={label} value={key ?? ""}>{label}</option>
+                  ))}
+                </select>
                 <input
                   type="url"
                   inputMode="url"

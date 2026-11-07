@@ -49,9 +49,11 @@ function OriginalMedia({ row }) {
 }
 
 function PickRow({ pick, games, onChange }) {
+  // Rows from before multi-sport ingestion have no sport; they were all NFL.
+  const sport = pick.sport || "NFL";
   const sportGames = useMemo(
-    () => games.filter((g) => g.sport === "NFL"),
-    [games],
+    () => games.filter((g) => g.sport === sport),
+    [games, sport],
   );
 
   // When the resolver found several plausible players, narrow the dropdown to

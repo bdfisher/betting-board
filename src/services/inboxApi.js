@@ -62,15 +62,17 @@ export async function signedImageUrl(path, expiresInSeconds = 3600) {
  * bundle. (The iOS Shortcut, which can't hold a session, uses a secret header
  * instead; the function accepts either.)
  *
+ * `sport` is optional; when set, every extracted pick is filed under it.
+ *
  * Returns { ok, picks, warnings } or { ok: false, error }.
  */
-export async function ingestUrl(url) {
+export async function ingestUrl(url, sport = null) {
   if (!isSupabaseConfigured) {
     return { ok: false, error: "Supabase isn't configured" };
   }
   try {
     const { data, error } = await supabase.functions.invoke("ingest-pick", {
-      body: { url: url.trim() },
+      body: { url: url.trim(), ...(sport ? { sport } : {}) },
     });
     if (error) throw error;
     return data ?? { ok: false, error: "Empty response" };
