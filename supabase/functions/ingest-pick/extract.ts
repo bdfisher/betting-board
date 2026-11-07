@@ -432,7 +432,8 @@ export async function extractPicks(opts: {
     { text: JSON.stringify(context, null, 2) },
   ];
 
-  const generate = async (): Promise<Extraction> => {
+  let lastEmptyReason = "";
+  const callModel = async (pinTemperature: boolean): Promise<Extraction | null> => {
     const res = await ai.models.generateContent({
       model: MODEL,
       contents: [{ role: "user", parts }],
@@ -440,11 +441,11 @@ export async function extractPicks(opts: {
         systemInstruction: nfl ? NFL_SYSTEM_PROMPT : SYSTEM_PROMPT,
         responseMimeType: "application/json",
         responseJsonSchema: nfl ? NFL_EXTRACTION_SCHEMA : EXTRACTION_SCHEMA,
-        // NFL keeps the setting it was proven on. Elsewhere, no override:
+        // NFL tries the setting it was proven on first. Otherwise no override:
         // Gemini 3 is tuned for the default 1.0, and Google warns lower values
         // cause looping — at 0 the multi-sport prompt spiralled inside
         // statedTeam on a cheat sheet and closed the array after one pick.
-        ...(nfl ? { temperature: 0 } : {}),
+        ...(pinTemperature ? { temperature: 0 } : {}),
         // A 4-page cheat sheet can yield 40+ picks; the default output cap would
         // truncate mid-array and the JSON.parse would fail.
         maxOutputTokens: 16384,
@@ -452,7 +453,12 @@ export async function extractPicks(opts: {
     });
 
     const raw = res.text;
-    if (!raw) throw new Error("Model returned no text");
+    if (!raw) {
+      // Usually MAX_TOKENS: a looping run burns the whole budget thinking and
+      // never writes the answer. Recorded so the inbox row says which.
+      lastEmptyReason = res.candidates?.[0]?.finishReason ?? res.promptFeedback?.blockReason ?? "unknown";
+      return null;
+    }
 
     // responseMimeType makes malformed JSON unlikely, not impossible.
     try {
@@ -462,14 +468,30 @@ export async function extractPicks(opts: {
     }
   };
 
-  // A degenerate run leaks its reasoning into a short field and then stops
-  // early, so the visible symptom is a 300-char statedTeam and a missing
-  // slate. Retry once; if it happens again, keep what we got but drop the
-  // junk team so it can't steer the roster lookup.
-  let parsed = await generate();
+  // Gemini's free tier 503s under load ("high demand"). Those clear in
+  // seconds, so wait and try again rather than failing the import.
+  const generate = async (pinTemperature: boolean): Promise<Extraction | null> => {
+    for (let attempt = 0;; attempt++) {
+      try {
+        return await callModel(pinTemperature);
+      } catch (e) {
+        const overloaded = /\b503\b|UNAVAILABLE|overloaded/i.test(e instanceof Error ? e.message : String(e));
+        if (!overloaded || attempt >= 2) throw e;
+        await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
+      }
+    }
+  };
+
+  // A degenerate run either leaks its reasoning into a short field and stops
+  // early (a 300-char statedTeam, one pick) or loops until the token budget is
+  // gone and returns nothing. Retry once at the default temperature; if it
+  // happens again, keep what we got but drop the junk team so it can't steer
+  // the roster lookup.
+  let parsed = await generate(nfl);
   const warnings: string[] = [];
-  if (hasRunawayField(parsed)) {
-    parsed = await generate();
+  if (!parsed || hasRunawayField(parsed)) {
+    parsed = await generate(false) ?? parsed;
+    if (!parsed) throw new Error(`Model returned no text (${lastEmptyReason})`);
     if (hasRunawayField(parsed)) {
       warnings.push("The model's output looked garbled — some picks may be missing. Try importing again.");
     }
