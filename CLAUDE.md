@@ -24,18 +24,18 @@ Dev server: `npm run dev` → `http://localhost:5173/betting-board/`
 src/
   App.jsx          — entire app UI and state (single-component architecture)
   AddPick.jsx      — ESPN autofill component rendered inside App's "Add" tab
-  PickInbox.jsx    — review sheet for picks shared in from X (see Pick Ingestion)
+  ImportReview.jsx — review sheet for picks imported from a post (see Pick Ingestion)
   AuthGate.jsx     — Supabase magic-link auth wrapper (skipped when Supabase not configured)
   storage.js       — get/set wrapper over Supabase + localStorage fallback
   supabaseClient.js — creates Supabase client from env vars; exports isSupabaseConfigured
   services/
     sportsApi.js   — ESPN API wrapper (getEventsByDate, getNflWeekEvents, parseEspnEvent)
-    inboxApi.js    — reads/updates the pick_inbox staging table
+    ingestApi.js   — calls the ingest-pick edge function
   index.css        — Tailwind base + minor globals
 
 supabase/
   README.md        — ingestion setup: deploy, secrets
-  migrations/      — pick_inbox table + storage bucket
+  migrations/      — legacy pick_inbox table + storage bucket (no longer used)
   functions/ingest-pick/
     index.ts       — HTTP handler (Deno), auth, orchestration
     fxtwitter.ts   — tweet URL → text + media
@@ -217,13 +217,13 @@ In `App.jsx`, `importGamesFromApi(newGames)` deduplicates by `sport + label` bef
 
 ---
 
-## Pick Ingestion (share a tweet or article → Inbox)
+## Pick Ingestion (import a tweet or article)
 
-The Add tab's import field sends a tweet URL, article URL, or screenshot to a Supabase Edge Function, which extracts the pick(s) and stages them for review. Any sport: the import field has a sport dropdown (default "Auto", where the model reads the sport off the post). Choosing NFL runs the original NFL-only prompt in `extract.ts`, which reads full prop cheat sheets more reliably than the multi-sport one. A chosen sport is authoritative: it stamps every pick and limits game matching to that sport's games. Player props get the live-roster lookup below **for NFL only**; other sports' props match a game only when the post names the player's team.
+The Add tab's import field sends a tweet or article URL to a Supabase Edge Function, which extracts the pick(s) and returns them; a review sheet opens on them right away. Any sport: the import field has a sport dropdown (default "Auto", where the model reads the sport off the post). Choosing NFL runs the original NFL-only prompt in `extract.ts`, which reads full prop cheat sheets more reliably than the multi-sport one. A chosen sport is authoritative: it stamps every pick and limits game matching to that sport's games. Player props get the live-roster lookup below **for NFL only**; other sports' props match a game only when the post names the player's team.
 
 Any URL that isn't an X permalink is treated as a picks article (Action Network, Covers, Rotowire, …): `article.ts` fetches the server-rendered HTML and strips it to text. **An article's source is always the site**, never the individual writers — matched against sources by `og:site_name`/hostname, so a source named "Covers" matches "Covers.com". Full setup in [`supabase/README.md`](supabase/README.md).
 
-**The architectural constraint:** nothing in this pipeline writes `boards.board`. `persistBoard` rewrites that entire blob from in-memory state on every mutation and the app only reads it on mount, so an external writer would be silently clobbered by the next tap. Extracted picks land in a separate `pick_inbox` table; they only become board data when you tap Accept, which runs them through `acceptInboxPicks` → the normal `persistBoard` path.
+**The architectural constraint:** nothing in this pipeline writes `boards.board`. `persistBoard` rewrites that entire blob from in-memory state on every mutation and the app only reads it on mount, so an external writer would be silently clobbered by the next tap. The function only returns what it found and stores nothing; picks become board data when you tap Add in the review sheet, which runs them through `acceptImportedPicks` → the normal `persistBoard` path. Closing the sheet discards them.
 
 **Player props are resolved in code, never by the model.** Rosters churn (J.K. Dobbins: Ravens → Chargers → Broncos in three seasons) and training data is frozen, so a model will name a stale team with full confidence. `espn.ts` instead: searches ESPN for the name → filters to `defaultLeagueSlug === "nfl"` → intersects against games on the board → verifies the player is on that team's **current roster** (ESPN's search indexes retired players under their last team, which otherwise creates false ambiguity). Anything it can't resolve to exactly one player arrives gameless with a warning rather than guessed at.
 

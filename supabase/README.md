@@ -1,7 +1,7 @@
 # Tweet / Article → Pick ingestion
 
-Paste a post URL into the Add tab; the picks show up in the app's Inbox waiting
-for approval.
+Paste a post URL into the Add tab; a review sheet opens on the picks it found,
+and the ones you keep go on the board.
 
 ```
 Add tab "Import from a post"
@@ -10,31 +10,24 @@ Add tab "Import from a post"
 Edge Function  ingest-pick
       ├─ X URL → api.fxtwitter.com → text + media
       ├─ other URL → fetch article HTML → text  (r.jina.ai fallback); source = the site
-      ├─ image → Supabase Storage + base64 to the model
-      ├─ reads boards.settings (sources) + boards.board (this week's NFL games)
+      ├─ reads boards.settings (sources) + boards.board (this week's games)
       ├─ Gemini → picks[]
       ├─ player props → ESPN search + roster → team → game   (code, not model)
-      └─ INSERT pick_inbox (status='pending')
+      └─ returns { post, picks }   (nothing stored)
       ▼
-App — Board tab banner → review sheet → Accept → normal persistBoard path
+App — review sheet → Add → normal persistBoard path
 ```
 
 **Nothing here writes `boards.board`.** The app rewrites that whole JSON blob
 from memory on every mutation and only reads it on mount, so an external writer
-would be clobbered by your next tap. Picks stage in `pick_inbox` instead, and
-only become board data when you accept them.
+would be clobbered by your next tap. The function only returns what it found;
+picks become board data when you add them in the app.
 
 ---
 
 ## Setup
 
-### 1. Database
-
-Paste [`migrations/20261003_pick_inbox.sql`](migrations/20261003_pick_inbox.sql)
-into the Supabase dashboard → SQL Editor and run it. Creates the `pick_inbox`
-table with RLS, and the private `pick-inbox` storage bucket.
-
-### 2. Gemini API key
+### 1. Gemini API key
 
 Get one at [aistudio.google.com](https://aistudio.google.com/apikey) — free
 tier, no credit card. **Use a personal Google account, not a work one.**
@@ -43,7 +36,7 @@ Free-tier Flash limits are ~10 requests/minute and ~1,500/day, which is orders
 of magnitude more than this uses. Note Google may use free-tier inputs for
 training; these are public tweets, so there's nothing sensitive in them.
 
-### 3. Secrets
+### 2. Secrets
 
 Set in the dashboard → **Edge Functions → Secrets**
 (`.../project/zeafyxuumutysmsdmwrd/functions/secrets`):
@@ -55,7 +48,7 @@ Set in the dashboard → **Edge Functions → Secrets**
 
 `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically.
 
-### 4. Deploy
+### 3. Deploy
 
 Already deployed. To redeploy after editing the function, either use the
 Supabase MCP server's `deploy_edge_function`, or the CLI:
@@ -69,11 +62,11 @@ supabase functions deploy ingest-pick --no-verify-jwt
 `--no-verify-jwt` does **not** make the function public: the handler verifies
 the signed-in user's JWT itself and rejects everything else with a 401.
 
-### 5. Smoke test
+### 4. Smoke test
 
 Import the current NFL week in the app first (Add tab → Autofill NFL week) so
 there are games to match against, then paste a tweet URL into "Import from a
-post". The picks should appear in the Inbox banner on the Board tab.
+post". The review sheet should open on the picks it found.
 
 ---
 
@@ -151,24 +144,19 @@ is *arrive needing attention* over *arrive confidently wrong*.
 
 | File | Role |
 |---|---|
-| `functions/ingest-pick/index.ts` | HTTP handler, auth, orchestration, row insert |
+| `functions/ingest-pick/index.ts` | HTTP handler, auth, orchestration |
 | `functions/ingest-pick/fxtwitter.ts` | tweet URL → text + media |
 | `functions/ingest-pick/article.ts` | article URL → text + site name |
 | `functions/ingest-pick/espn.ts` | player prop → team → board game |
 | `functions/ingest-pick/extract.ts` | Gemini call, JSON schema, system prompt |
-| `migrations/20261003_pick_inbox.sql` | table, RLS, storage bucket |
-| `../src/services/inboxApi.js` | app-side reads of `pick_inbox` |
-| `../src/PickInbox.jsx` | review sheet |
+| `../src/services/ingestApi.js` | app-side call to the function |
+| `../src/ImportReview.jsx` | review sheet |
 
 ## Tuning extraction
 
 The system prompt in `extract.ts` is where accuracy lives. Add real examples to
 it as you hit misses — bare player props, pick-card graphics, lean vs. POTD
-phrasing. Check what a given post actually produced:
-
-```sql
-select created_at, author_handle, error, jsonb_pretty(extracted)
-from pick_inbox order by created_at desc limit 5;
-```
+phrasing. To see what a given post actually produced, check the function's
+logs in the Supabase dashboard, or the response in the browser's network tab.
 
 To swap models without a code change: `supabase secrets set GEMINI_MODEL=...`.

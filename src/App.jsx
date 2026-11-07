@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { storage } from "./storage";
 import { supabase, isSupabaseConfigured } from "./supabaseClient";
-import PickInbox from "./PickInbox";
-import { fetchPending, ingestUrl, markAccepted } from "./services/inboxApi";
+import ImportReview from "./ImportReview";
+import { ingestUrl } from "./services/ingestApi";
 import {
   Plus,
   Trash2,
@@ -21,7 +21,6 @@ import {
   Tag,
   RefreshCw,
   StickyNote,
-  Inbox,
 } from "lucide-react";
 import AddPickAutofill from "./AddPick";
 import sportsApi, { parseEspnEvent } from "./services/sportsApi";
@@ -993,11 +992,9 @@ export default function BetBoard() {
   const [confirmDialog, setConfirmDialog] = useState(null); // { message, confirmLabel, onConfirm }
   const [showHelp, setShowHelp] = useState(false);
 
-  // Picks extracted from shared tweets/screenshots, waiting to be reviewed.
-  // These live in their own Supabase table, not in the board blob — see
-  // services/inboxApi.js for why.
-  const [inbox, setInbox] = useState([]);
-  const [inboxOpen, setInboxOpen] = useState(false);
+  // The post just imported, with its extracted picks, while the review sheet
+  // is open. Held only in memory — closing the sheet discards it.
+  const [importReview, setImportReview] = useState(null);
   const [ingestUrlText, setIngestUrlText] = useState("");
   const [ingestSport, setIngestSport] = useState(null); // null = let the model detect it
   const [ingesting, setIngesting] = useState(false);
@@ -1111,31 +1108,6 @@ export default function BetBoard() {
   useEffect(() => {
     updateExportJson(sources);
   }, [sources]);
-
-  // Load the pick inbox on mount and whenever the app comes back to the
-  // foreground. The usual flow is share-from-X then open the PWA, so a refresh
-  // on visibility is what makes the banner show up without a manual reload.
-  useEffect(() => {
-    let mounted = true;
-    const refresh = async () => {
-      const rows = await fetchPending();
-      if (mounted) setInbox(rows);
-    };
-    refresh();
-    const onVisible = () => { if (document.visibilityState === "visible") refresh(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      mounted = false;
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, []);
-
-  // Close the review sheet once the last row is cleared, rather than leaving an
-  // empty sheet open. The banner can't open it empty, so this only fires after
-  // you've worked through the queue.
-  useEffect(() => {
-    if (inboxOpen && inbox.length === 0) setInboxOpen(false);
-  }, [inbox.length, inboxOpen]);
 
   const persistSettings = useCallback(async (nextSources, nextUnit, nextBooks = books) => {
     try {
@@ -1494,8 +1466,8 @@ export default function BetBoard() {
     setTimeout(() => setToast(null), 2500);
   }
 
-  // Paste a post URL → edge function extracts the picks → they land in the
-  // Inbox for review. Nothing reaches the board until you accept them.
+  // Paste a post URL → edge function extracts the picks → the review sheet
+  // opens on them. Nothing reaches the board until you add them.
   async function runIngest() {
     const url = ingestUrlText.trim();
     if (!url || ingesting) return;
@@ -1506,13 +1478,10 @@ export default function BetBoard() {
       const res = await ingestUrl(url, ingestSport);
       if (res.ok && res.picks > 0) {
         setIngestUrlText("");
-        setIngestStatus({ ok: true, message: `Found ${res.picks} pick${res.picks === 1 ? "" : "s"} — review in the Inbox.` });
-        setInbox(await fetchPending());
-        setInboxOpen(true);
+        setImportReview(res.post);
       } else if (res.ok) {
         // Reached the model fine, it just didn't find a bet in the post.
         setIngestStatus({ ok: false, message: "No picks found in that post." });
-        setInbox(await fetchPending());
       } else {
         setIngestStatus({ ok: false, message: res.error || "Couldn't read that post." });
       }
@@ -1521,17 +1490,16 @@ export default function BetBoard() {
     }
   }
 
-  // The single point where inbox data becomes board data. Builds picks in
+  // The single point where imported picks become board data. Builds picks in
   // exactly the shape addPick() produces and persists through the normal
-  // persistBoard path, so the inbox never writes the board blob itself.
-  async function acceptInboxPicks(row, chosen) {
+  // persistBoard path.
+  async function acceptImportedPicks(chosen) {
     const now = new Date().toISOString();
     const newPicks = chosen.map((p) => ({
       id: uid(),
       gameId: p.gameId || null,
       label: (p.label || "").trim(),
-      // A matched game's sport wins; the extractor's read is the fallback, and
-      // rows from before multi-sport ingestion carry neither.
+      // A matched game's sport wins; the extractor's read is the fallback.
       sport: games.find((g) => g.id === p.gameId)?.sport || p.sport || "NFL",
       sources: p.sourceId
         ? [{
@@ -1558,8 +1526,7 @@ export default function BetBoard() {
     setPicks(nextPicks);
     await persistBoard(games, nextPicks);
 
-    await markAccepted(row.id);
-    setInbox((cur) => cur.filter((r) => r.id !== row.id));
+    setImportReview(null);
     showToast(`Added ${newPicks.length} pick${newPicks.length === 1 ? "" : "s"}`);
   }
 
@@ -2182,21 +2149,6 @@ export default function BetBoard() {
       <div className={`${shellWidth} mx-auto px-4 pt-4`}>
         {activeTab === "board" && (
           <div className="space-y-4">
-            {/* Picks shared in from X, waiting for review. Only rendered when
-                something's actually pending. */}
-            {inbox.length > 0 && (
-              <button
-                onClick={() => setInboxOpen(true)}
-                className="w-full flex items-center justify-between gap-2 bg-[#bd93f9]/15 border border-[#bd93f9]/40 rounded-lg px-3 py-2.5 active:bg-[#bd93f9]/25"
-              >
-                <span className="flex items-center gap-2 text-sm text-[#bd93f9] font-medium">
-                  <Inbox size={16} />
-                  {inbox.length} post{inbox.length === 1 ? "" : "s"} waiting
-                </span>
-                <ChevronRight size={16} className="text-[#bd93f9]" />
-              </button>
-            )}
-
             {picks.length === 0 && games.length === 0 && tickets.length === 0 ? (
               <div className="text-sm text-[#6272a4] bg-[#343746] border border-[#44475a] rounded-lg px-3 py-8 text-center">
                 No picks yet.{" "}
@@ -2369,7 +2321,7 @@ export default function BetBoard() {
         {activeTab === "add" && (
           <div className="space-y-4">
 
-            {/* Paste a post or article URL — extracts the picks into the Inbox for review.
+            {/* Paste a post or article URL — extracts the picks and opens them for review.
                 A cheat-sheet post can yield 20+ props. */}
             <div className="bg-[#343746] border border-[#44475a] rounded-lg p-3 space-y-2">
               <label className="text-xs uppercase tracking-wide text-[#6272a4]">
@@ -3020,16 +2972,16 @@ export default function BetBoard() {
         <HelpCircle size={22} />
       </button>
 
-      {/* Pick inbox — review sheet for picks shared in from X */}
-      <PickInbox
-        open={inboxOpen}
-        rows={inbox}
-        games={games}
-        sources={sources}
-        onClose={() => setInboxOpen(false)}
-        onAccept={acceptInboxPicks}
-        onDismissed={(id) => setInbox((cur) => cur.filter((r) => r.id !== id))}
-      />
+      {/* Review sheet for the post just imported */}
+      {importReview && (
+        <ImportReview
+          post={importReview}
+          games={games}
+          sources={sources}
+          onClose={() => setImportReview(null)}
+          onAccept={acceptImportedPicks}
+        />
+      )}
 
       {/* Scoring help modal */}
       {showHelp && (

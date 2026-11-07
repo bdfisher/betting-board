@@ -1,11 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Trash2, X } from "lucide-react";
-import { markDismissed, signedImageUrl } from "./services/inboxApi";
+import React, { useMemo, useState } from "react";
+import { AlertTriangle, Check, X } from "lucide-react";
 
-// Review sheet for picks the ingest-pick edge function extracted from shared
-// tweets, articles, and screenshots. Nothing here writes to the board directly — accepting
+// Review sheet for the picks the ingest-pick edge function extracted from one
+// imported tweet or article. Nothing is stored until you add them — accepting
 // hands picks back to App.jsx, which runs them through the same persistBoard
-// path as every other mutation.
+// path as every other mutation. Closing the sheet discards them.
 //
 // Lives outside App.jsx on the same grounds AddPick.jsx does: a self-contained,
 // prop-driven feature component rather than several hundred more lines in the
@@ -26,18 +25,7 @@ const RESOLUTION_NOTE = {
 const inputCls =
   "w-full bg-[#282a36] border border-[#44475a] rounded-lg px-3 py-2 text-sm placeholder-[#6272a4]";
 
-/** Screenshot (private bucket, needs signing) or tweet media (already public). */
-function OriginalMedia({ row }) {
-  const [url, setUrl] = useState(row.image_url ?? null);
-
-  useEffect(() => {
-    let alive = true;
-    if (!row.image_url && row.image_path) {
-      signedImageUrl(row.image_path).then((u) => alive && setUrl(u));
-    }
-    return () => { alive = false; };
-  }, [row.image_url, row.image_path]);
-
+function OriginalMedia({ url }) {
   if (!url) return null;
   return (
     <img
@@ -151,22 +139,22 @@ function PickRow({ pick, games, onChange }) {
 // nothing selected and you opt in; small ones stay opt-out.
 const CHERRY_PICK_THRESHOLD = 5;
 
-function InboxCard({ row, games, sources, onAccept, onDismiss }) {
+export default function ImportReview({ post, games, sources, onClose, onAccept }) {
   const [picks, setPicks] = useState(() => {
-    const list = row.extracted?.picks ?? [];
+    const list = post.extracted?.picks ?? [];
     const skipByDefault = list.length > CHERRY_PICK_THRESHOLD;
-    return list.map((p, i) => ({ ...p, _key: `${row.id}_${i}`, _skip: skipByDefault }));
+    return list.map((p, i) => ({ ...p, _key: String(i), _skip: skipByDefault }));
   });
   const [busy, setBusy] = useState(false);
 
-  // A post has exactly one author, so the source belongs to the card rather
+  // A post has exactly one author, so the source belongs to the sheet rather
   // than to each pick — fixing it 16 times on a cheat sheet would be absurd.
   // Seeded from whatever the resolver matched; falls back to any pick that did.
   const [sourceId, setSourceId] = useState(
-    () => (row.extracted?.picks ?? []).find((p) => p.sourceId)?.sourceId ?? "",
+    () => (post.extracted?.picks ?? []).find((p) => p.sourceId)?.sourceId ?? "",
   );
 
-  const warnings = row.extracted?.warnings ?? [];
+  const warnings = post.extracted?.warnings ?? [];
   const selected = picks.filter((p) => !p._skip);
   const isSheet = picks.length > CHERRY_PICK_THRESHOLD;
   const allSelected = selected.length === picks.length;
@@ -177,120 +165,8 @@ function InboxCard({ row, games, sources, onAccept, onDismiss }) {
   const accept = async () => {
     if (!selected.length || busy) return;
     setBusy(true);
-    await onAccept(row, selected.map((p) => ({ ...p, sourceId: sourceId || null })));
+    await onAccept(selected.map((p) => ({ ...p, sourceId: sourceId || null })));
     setBusy(false);
-  };
-
-  return (
-    <div className="bg-[#343746] border border-[#44475a] rounded-xl p-3 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-[#8be9fd] truncate">
-          {row.author_handle || "Shared post"}
-        </span>
-        <button
-          onClick={() => onDismiss(row)}
-          className="text-[#6272a4] active:text-[#ff5555] flex-shrink-0 p-1"
-          aria-label="Dismiss"
-        >
-          <Trash2 size={15} />
-        </button>
-      </div>
-
-      <OriginalMedia row={row} />
-
-      {row.raw_text && (
-        <p className="text-xs text-[#6272a4] leading-relaxed whitespace-pre-wrap line-clamp-6">
-          {row.raw_text}
-        </p>
-      )}
-
-      {/* One source for the whole post. */}
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] uppercase tracking-wide text-[#6272a4] flex-shrink-0">
-          Source
-        </span>
-        <select
-          value={sourceId}
-          onChange={(e) => setSourceId(e.target.value)}
-          className={`${inputCls} py-1.5 ${sourceId ? "" : "border-[#ffb86c]/60"}`}
-        >
-          <option value="">Choose a source…</option>
-          {sources.map((s) => (
-            <option key={s.id} value={s.id}>{s.name}</option>
-          ))}
-        </select>
-      </div>
-
-      {!sourceId && row.author_handle && (
-        <p className="text-[11px] text-[#ffb86c] -mt-1">
-          {row.author_handle} isn't in your sources yet — pick one, or add it in Setup.
-        </p>
-      )}
-
-      {row.error && (
-        <div className="flex items-start gap-1.5 text-[11px] text-[#ff5555]">
-          <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
-          <span>{row.error}</span>
-        </div>
-      )}
-
-      {warnings.map((w, i) => (
-        <div key={i} className="flex items-start gap-1.5 text-[11px] text-[#ffb86c]">
-          <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
-          <span>{w}</span>
-        </div>
-      ))}
-
-      {picks.length === 0 ? (
-        <p className="text-xs text-[#6272a4] italic">
-          No picks found in this post.
-        </p>
-      ) : (
-        <div className="space-y-2">
-          {isSheet && (
-            <div className="flex items-center justify-between text-[11px] text-[#6272a4] pb-1">
-              <span>{picks.length} props — pick the ones you want</span>
-              <button onClick={toggleAll} className="text-[#bd93f9] active:opacity-70">
-                {allSelected ? "Clear all" : "Select all"}
-              </button>
-            </div>
-          )}
-          {picks.map((p) => (
-            <PickRow
-              key={p._key}
-              pick={p}
-              games={games}
-              onChange={(next) =>
-                setPicks((cur) => cur.map((x) => (x._key === next._key ? next : x)))
-              }
-            />
-          ))}
-        </div>
-      )}
-
-      {picks.length > 0 && (
-        <button
-          onClick={accept}
-          disabled={!selected.length || !sourceId || busy}
-          className="w-full bg-[#50fa7b] text-[#282a36] rounded-lg py-2.5 text-sm font-semibold active:opacity-80 disabled:opacity-40"
-        >
-          {busy
-            ? "Adding…"
-            : !sourceId
-            ? "Choose a source first"
-            : `Add ${selected.length} pick${selected.length === 1 ? "" : "s"}`}
-        </button>
-      )}
-    </div>
-  );
-}
-
-export default function PickInbox({ open, rows, games, sources, onClose, onAccept, onDismissed }) {
-  if (!open) return null;
-
-  const dismiss = async (row) => {
-    await markDismissed(row.id);
-    onDismissed(row.id);
   };
 
   return (
@@ -302,30 +178,101 @@ export default function PickInbox({ open, rows, games, sources, onClose, onAccep
         className="w-full max-w-md bg-[#282a36] border border-[#44475a] rounded-xl p-4 space-y-3 max-h-[88dvh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label="Pick inbox"
+        aria-label="Review imported picks"
       >
-        <div className="flex items-center justify-between sticky -top-4 -mx-4 px-4 py-2 bg-[#282a36] z-10">
-          <span className="text-sm font-bold text-[#f8f8f2]">
-            Inbox{rows.length ? ` (${rows.length})` : ""}
+        <div className="flex items-center justify-between gap-2 sticky -top-4 -mx-4 px-4 py-2 bg-[#282a36] z-10">
+          <span className="text-sm font-bold text-[#8be9fd] truncate">
+            {post.author_handle || "Imported post"}
           </span>
-          <button onClick={onClose} className="text-[#6272a4] p-1" aria-label="Close">
+          <button onClick={onClose} className="text-[#6272a4] p-1 flex-shrink-0" aria-label="Close">
             <X size={18} />
           </button>
         </div>
 
-        {rows.length === 0 ? (
-          <p className="text-sm text-[#6272a4] text-center py-8">Nothing waiting.</p>
+        <OriginalMedia url={post.image_url} />
+
+        {post.raw_text && (
+          <p className="text-xs text-[#6272a4] leading-relaxed whitespace-pre-wrap line-clamp-6">
+            {post.raw_text}
+          </p>
+        )}
+
+        {/* One source for the whole post. */}
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wide text-[#6272a4] flex-shrink-0">
+            Source
+          </span>
+          <select
+            value={sourceId}
+            onChange={(e) => setSourceId(e.target.value)}
+            className={`${inputCls} py-1.5 ${sourceId ? "" : "border-[#ffb86c]/60"}`}
+          >
+            <option value="">Choose a source…</option>
+            {sources.map((s) => (
+              <option key={s.id} value={s.id}>{s.name}</option>
+            ))}
+          </select>
+        </div>
+
+        {!sourceId && post.author_handle && (
+          <p className="text-[11px] text-[#ffb86c] -mt-1">
+            {post.author_handle} isn't in your sources yet — pick one, or add it in Setup.
+          </p>
+        )}
+
+        {post.error && (
+          <div className="flex items-start gap-1.5 text-[11px] text-[#ff5555]">
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+            <span>{post.error}</span>
+          </div>
+        )}
+
+        {warnings.map((w, i) => (
+          <div key={i} className="flex items-start gap-1.5 text-[11px] text-[#ffb86c]">
+            <AlertTriangle size={12} className="mt-0.5 flex-shrink-0" />
+            <span>{w}</span>
+          </div>
+        ))}
+
+        {picks.length === 0 ? (
+          <p className="text-xs text-[#6272a4] italic">
+            No picks found in this post.
+          </p>
         ) : (
-          rows.map((row) => (
-            <InboxCard
-              key={row.id}
-              row={row}
-              games={games}
-              sources={sources}
-              onAccept={onAccept}
-              onDismiss={dismiss}
-            />
-          ))
+          <div className="space-y-2">
+            {isSheet && (
+              <div className="flex items-center justify-between text-[11px] text-[#6272a4] pb-1">
+                <span>{picks.length} props — pick the ones you want</span>
+                <button onClick={toggleAll} className="text-[#bd93f9] active:opacity-70">
+                  {allSelected ? "Clear all" : "Select all"}
+                </button>
+              </div>
+            )}
+            {picks.map((p) => (
+              <PickRow
+                key={p._key}
+                pick={p}
+                games={games}
+                onChange={(next) =>
+                  setPicks((cur) => cur.map((x) => (x._key === next._key ? next : x)))
+                }
+              />
+            ))}
+          </div>
+        )}
+
+        {picks.length > 0 && (
+          <button
+            onClick={accept}
+            disabled={!selected.length || !sourceId || busy}
+            className="w-full bg-[#50fa7b] text-[#282a36] rounded-lg py-2.5 text-sm font-semibold active:opacity-80 disabled:opacity-40"
+          >
+            {busy
+              ? "Adding…"
+              : !sourceId
+              ? "Choose a source first"
+              : `Add ${selected.length} pick${selected.length === 1 ? "" : "s"}`}
+          </button>
         )}
       </div>
     </div>

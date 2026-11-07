@@ -1,6 +1,7 @@
-// POST endpoint that turns a shared post (tweet URL, article URL, screenshot,
-// or raw text) into picks staged in pick_inbox for review in the app. Any
-// sport extracts; only NFL player props get the live-roster lookup.
+// POST endpoint that turns a tweet or article URL into picks, returned to the
+// app for review. Nothing is stored here — the app adds the ones you keep to
+// the board itself. Any sport extracts; only NFL player props get the
+// live-roster lookup.
 //
 // Called by the app's "Import from a post" field, which authenticates with the
 // signed-in user's JWT. The handler verifies that JWT itself (see the auth
@@ -12,16 +13,11 @@ import { resolveArticle } from "./article.ts";
 import { type BoardGame, resolvePlayerProp } from "./espn.ts";
 import { type ExtractedPick, extractPicks, type SourceRef, SPORTS } from "./extract.ts";
 
-const BUCKET = "pick-inbox";
-
 // Cheat-sheet posts carry 2–4 pages; this bounds a pathological one.
 const MAX_IMAGES = 6;
 
 interface RequestBody {
   url?: string;
-  image?: string; // base64, no data: prefix
-  media_type?: string;
-  text?: string;
   /** Sport chosen in the app before importing. Absent → the model decides. */
   sport?: string;
 }
@@ -156,7 +152,8 @@ Deno.serve(async (req: Request) => {
 
   // ---- auth ----------------------------------------------------------------
   // Derive the user from the signed-in session's JWT — no shared secret ships
-  // in the client bundle, and the row lands on whichever account is signed in.
+  // in the client bundle, and the board read below is whichever account is
+  // signed in.
   let userId: string | null = null;
 
   const authz = req.headers.get("Authorization");
@@ -174,37 +171,16 @@ Deno.serve(async (req: Request) => {
     return json({ error: "Body must be JSON" }, 400);
   }
 
-  if (!body.url && !body.image && !body.text) {
-    return json({ error: "Provide one of: url, image, text" }, 400);
-  }
+  if (!body.url) return json({ error: "Provide a url" }, 400);
 
-  const kind = body.url ? "url" : body.image ? "image" : "text";
-  const row = {
-    user_id: userId,
-    kind,
-    status: "pending",
-    source_url: body.url ?? null,
-    raw_text: body.text ?? null,
+  // What the review sheet shows: the post itself plus what was extracted.
+  const post = {
+    source_url: body.url,
+    raw_text: null as string | null,
     image_url: null as string | null,
-    image_path: null as string | null,
     author_handle: null as string | null,
-    extracted: null as unknown,
-    model: null as string | null,
     error: null as string | null,
-  };
-
-  // Every exit path below still inserts a row. A pick that arrives broken is
-  // one tap from manual entry; a 500 means the pick is gone.
-  //
-  // `insertedId` guards the error path: anything that throws *after* the row
-  // already landed (a bad base64 payload reaching atob, say) must not insert a
-  // second copy — it should annotate the existing row instead.
-  let insertedId: string | null = null;
-  const insert = async () => {
-    const { data, error } = await supabase.from("pick_inbox").insert(row).select("id").single();
-    if (error) throw error;
-    insertedId = data.id as string;
-    return insertedId;
+    extracted: null as unknown,
   };
 
   try {
@@ -220,14 +196,14 @@ Deno.serve(async (req: Request) => {
 
     // ---- 1. resolve the input ----------------------------------------------
     // Anything that isn't an X permalink is treated as an article.
-    if (body.url && !parseStatusId(body.url)) {
+    if (!parseStatusId(body.url)) {
       const a = await resolveArticle(body.url);
       article = { site: a.siteName, hostLabel: a.hostLabel, title: a.title, publishedAt: a.publishedAt, url: a.permalink };
-      // Title first: the inbox card shows the opening lines of raw_text.
-      row.raw_text = a.text ? [a.title, a.text].filter(Boolean).join("\n\n") : null;
-      row.author_handle = a.siteName;
-      row.source_url = a.permalink;
-      if (a.error) row.error = a.error;
+      // Title first: the review sheet shows the opening lines of raw_text.
+      post.raw_text = a.text ? [a.title, a.text].filter(Boolean).join("\n\n") : null;
+      post.author_handle = a.siteName;
+      post.source_url = a.permalink;
+      if (a.error) post.error = a.error;
 
       // Sharing last week's article by mistake is easy, and its players are
       // probably on this week's board too — so the picks would look plausible.
@@ -237,13 +213,13 @@ Deno.serve(async (req: Request) => {
           `Article was published ${centralDateISO(new Date(published))} — make sure these are this week's picks.`,
         );
       }
-    } else if (body.url) {
+    } else {
       const tweet = await resolveTweet(body.url);
-      row.raw_text = tweet.text;
-      row.author_handle = tweet.authorHandle;
-      row.image_url = tweet.imageUrl;
-      row.source_url = tweet.permalink ?? body.url;
-      if (tweet.error) row.error = tweet.error;
+      post.raw_text = tweet.text;
+      post.author_handle = tweet.authorHandle;
+      post.image_url = tweet.imageUrl;
+      post.source_url = tweet.permalink ?? body.url;
+      if (tweet.error) post.error = tweet.error;
 
       // Cheat sheets come as a 2–4 image carousel, so pull them all. Capped so
       // a pathological post can't blow up the request; the cap is surfaced as a
@@ -260,17 +236,10 @@ Deno.serve(async (req: Request) => {
       }
     }
 
-    if (body.image) {
-      const mimeType = body.media_type || "image/jpeg";
-      images.push({ data: body.image, mimeType });
-    }
-
-    // Nothing to read at all — store it and bail early rather than burning a
-    // model call on an empty prompt.
-    if (!row.raw_text && images.length === 0) {
-      row.error = row.error ?? "Nothing to extract — no text and no readable image";
-      const id = await insert();
-      return json({ ok: false, id, picks: 0, error: row.error });
+    // Nothing to read at all — bail rather than burning a model call on an
+    // empty prompt.
+    if (!post.raw_text && images.length === 0) {
+      return json({ ok: false, picks: 0, error: post.error ?? "Nothing to extract — no text and no readable image" });
     }
 
     // ---- 2. board context ---------------------------------------------------
@@ -318,17 +287,16 @@ Deno.serve(async (req: Request) => {
     const gamesById = new Map(boardGames.map((g) => [g.id, g]));
 
     // ---- 3. extract ---------------------------------------------------------
-    const { extraction, model } = await extractPicks({
-      text: row.raw_text,
+    const { extraction } = await extractPicks({
+      text: post.raw_text,
       images,
       sources,
       games: candidateGames.map((g) => ({ id: g.id, label: g.label, sport: g.sport ?? "Other", date: g.date })),
       sport: forcedSport,
-      authorHandle: row.author_handle,
+      authorHandle: post.author_handle,
       article: article ?? undefined,
     });
-    row.model = model;
-    row.author_handle = row.author_handle ?? extraction.authorHandle;
+    post.author_handle = post.author_handle ?? extraction.authorHandle;
 
     // An article's picks all belong to the site, whoever wrote each section.
     const articleSourceId = article
@@ -357,10 +325,10 @@ Deno.serve(async (req: Request) => {
         // model entirely — a writer's byline is never the source.
         sourceId: article
           ? articleSourceId
-          : resolveSourceId(sourceIndex, pick.sourceNameRaw, row.author_handle) ??
+          : resolveSourceId(sourceIndex, pick.sourceNameRaw, post.author_handle) ??
             pick.sourceId ??
             null,
-        sourceNameRaw: article ? row.author_handle : pick.sourceNameRaw ?? row.author_handle ?? null,
+        sourceNameRaw: article ? post.author_handle : pick.sourceNameRaw ?? post.author_handle ?? null,
         isPlayerProp: Boolean(pick.isPlayerProp),
       };
 
@@ -407,52 +375,22 @@ Deno.serve(async (req: Request) => {
       if (p.label) p.label = p.label.replace(/\bo(\d+(?:\.\d+)?\+)/gi, "$1");
     }
 
-    row.extracted = {
+    post.extracted = {
       picks,
       warnings: [...extraWarnings, ...extraction.warnings],
       isBettingContent: extraction.isBettingContent,
     };
 
-    // ---- 4. store the screenshot, then the row ------------------------------
-    const id = await insert();
-
-    // Best-effort: the picks are already saved, so a failed upload costs the
-    // review thumbnail, not the pick. Never let it take down the response.
-    if (body.image) {
-      try {
-        const path = `${userId}/${id}.jpg`;
-        const bytes = Uint8Array.from(atob(body.image), (c) => c.charCodeAt(0));
-        const { error: upErr } = await supabase.storage
-          .from(BUCKET)
-          .upload(path, bytes, { contentType: body.media_type || "image/jpeg", upsert: true });
-        if (!upErr) {
-          await supabase.from("pick_inbox").update({ image_path: path }).eq("id", id);
-        }
-      } catch (e) {
-        console.error("Screenshot upload failed", e);
-      }
-    }
-
     return json({
       ok: true,
-      id,
       picks: picks.length,
       warnings: [...extraWarnings, ...extraction.warnings],
       isBettingContent: extraction.isBettingContent,
+      post,
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    row.error = [row.error, msg].filter(Boolean).join(" | ");
-    try {
-      if (insertedId) {
-        // Row already landed — annotate it rather than inserting a duplicate.
-        await supabase.from("pick_inbox").update({ error: row.error }).eq("id", insertedId);
-        return json({ ok: false, id: insertedId, picks: 0, error: msg }, 200);
-      }
-      const id = await insert();
-      return json({ ok: false, id, picks: 0, error: msg }, 200);
-    } catch {
-      return json({ ok: false, picks: 0, error: msg }, 500);
-    }
+    // 200 with ok:false, so the app shows the message rather than
+    // functions.invoke's generic "non-2xx status" error.
+    return json({ ok: false, picks: 0, error: e instanceof Error ? e.message : String(e) });
   }
 });

@@ -455,7 +455,7 @@ export async function extractPicks(opts: {
     const raw = res.text;
     if (!raw) {
       // Usually MAX_TOKENS: a looping run burns the whole budget thinking and
-      // never writes the answer. Recorded so the inbox row says which.
+      // never writes the answer. Recorded so the error message says which.
       lastEmptyReason = res.candidates?.[0]?.finishReason ?? res.promptFeedback?.blockReason ?? "unknown";
       return null;
     }
