@@ -475,7 +475,12 @@ export async function extractPicks(opts: {
       try {
         return await callModel(pinTemperature);
       } catch (e) {
-        const overloaded = /\b503\b|UNAVAILABLE|overloaded/i.test(e instanceof Error ? e.message : String(e));
+        const msg = e instanceof Error ? e.message : String(e);
+        if (/\b429\b|RESOURCE_EXHAUSTED/.test(msg)) {
+          console.error("Gemini quota exhausted", msg);
+          throw new Error(quotaMessage(msg));
+        }
+        const overloaded = /\b503\b|UNAVAILABLE|overloaded/i.test(msg);
         if (!overloaded || attempt >= 2) throw e;
         await new Promise((r) => setTimeout(r, 3000 * (attempt + 1)));
       }
@@ -524,4 +529,21 @@ function hasRunawayField(e: Extraction): boolean {
   return (Array.isArray(e.picks) ? e.picks : []).some((p) =>
     isRunaway(p.statedTeam, TEAM_MAX) || isRunaway(p.playerName, NAME_MAX)
   );
+}
+
+/**
+ * The free tier caps requests per day, and Gemini's 429 carries the wait in a
+ * RetryInfo detail ("retryDelay": "14455s"). The raw error is a wall of JSON,
+ * so the app gets just the wait — or no time at all if Google omits it.
+ */
+function quotaMessage(raw: string): string {
+  const secs = Number(raw.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/)?.[1]);
+  if (!Number.isFinite(secs) || secs <= 0) return "Max tokens used. Try again later";
+
+  const mins = Math.ceil(secs / 60);
+  const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+  if (mins < 60) return `Max tokens used. Try again in ${plural(mins, "minute")}`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return `Max tokens used. Try again in ${plural(h, "hour")}${m ? ` ${plural(m, "minute")}` : ""}`;
 }
