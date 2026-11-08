@@ -4,8 +4,8 @@
 // shared URL into content.
 //
 // It's a third-party community service, so every failure path here degrades to
-// "no text, no image" rather than throwing — the caller still writes an inbox
-// row so the pick is never silently dropped.
+// "no text, no image" rather than throwing — the caller decides what to tell
+// the user.
 
 const TIMEOUT_MS = 8000;
 
@@ -15,7 +15,7 @@ const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 export interface ResolvedTweet {
   text: string | null;
   authorHandle: string | null;
-  /** First photo — kept for the inbox row's thumbnail. */
+  /** First photo — shown in the review sheet. */
   imageUrl: string | null;
   /** Every photo. Cheat-sheet posts routinely carry 2–4 pages of props. */
   imageUrls: string[];

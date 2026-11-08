@@ -11,17 +11,30 @@ const MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.5-flash";
 // which per-sport tier its source scores at.
 export const SPORTS = ["NFL", "NCAAF", "NCAAB", "NHL", "NBA", "MLS", "EPL", "Champions League", "MLB", "Other"];
 
+// statedTeam is constrained to these. As free text it was where Gemini's
+// degenerate runs spilled — "CINCINNATI BENGALS -> wait, statedTeam: …" for
+// hundreds of characters until the answer was cut off after one pick. An enum
+// leaves the model nothing to ramble in. Only NFL props use it (the roster
+// lookup), so other sports lose nothing.
+const NFL_TEAMS = [
+  "Arizona Cardinals", "Atlanta Falcons", "Baltimore Ravens", "Buffalo Bills",
+  "Carolina Panthers", "Chicago Bears", "Cincinnati Bengals", "Cleveland Browns",
+  "Dallas Cowboys", "Denver Broncos", "Detroit Lions", "Green Bay Packers",
+  "Houston Texans", "Indianapolis Colts", "Jacksonville Jaguars", "Kansas City Chiefs",
+  "Las Vegas Raiders", "Los Angeles Chargers", "Los Angeles Rams", "Miami Dolphins",
+  "Minnesota Vikings", "New England Patriots", "New Orleans Saints", "New York Giants",
+  "New York Jets", "Philadelphia Eagles", "Pittsburgh Steelers", "San Francisco 49ers",
+  "Seattle Seahawks", "Tampa Bay Buccaneers", "Tennessee Titans", "Washington Commanders",
+];
+
 export interface ExtractedPick {
   label: string;
   sport?: string | null;
-  matchup?: string | null;
   gameId?: string | null;
   sourceId?: string | null;
   sourceNameRaw?: string | null;
   strength?: "lean" | "normal" | "potd";
-  units?: string | null;
   confidence?: number;
-  notes?: string | null;
   isPlayerProp?: boolean;
   playerName?: string | null;
   /** Team printed on the graphic — read, never recalled. See the system prompt. */
@@ -49,6 +62,9 @@ export interface SourceRef {
  * Only genuinely-always-present fields are `required`; the rest are allowed to
  * be omitted and get normalized to null in code. That sidesteps the nullable
  * representation question entirely.
+ *
+ * Keep free-text fields to the ones the app reads. Every extra string is
+ * somewhere a looping run can spill into.
  */
 export const EXTRACTION_SCHEMA = {
   type: "object",
@@ -67,7 +83,6 @@ export const EXTRACTION_SCHEMA = {
               'Exact format per the system prompt: "McCaffrey o89.5 RuY", "Dobbins TD", "Chiefs -3.5"',
           },
           sport: { type: "string", enum: SPORTS },
-          matchup: { type: "string", description: 'Teams as written, e.g. "KC @ BUF"' },
           gameId: {
             type: "string",
             description: "Id from the supplied games list. Omit for player props.",
@@ -75,9 +90,7 @@ export const EXTRACTION_SCHEMA = {
           sourceId: { type: "string", description: "Id from the supplied sources list." },
           sourceNameRaw: { type: "string", description: "Handle/name as written in the post." },
           strength: { type: "string", enum: ["lean", "normal", "potd"] },
-          units: { type: "string", description: 'Stated size if any, e.g. "2u"' },
           confidence: { type: "number" },
-          notes: { type: "string" },
           isPlayerProp: { type: "boolean" },
           playerName: {
             type: "string",
@@ -85,8 +98,9 @@ export const EXTRACTION_SCHEMA = {
           },
           statedTeam: {
             type: "string",
+            enum: NFL_TEAMS,
             description:
-              'Only the team name printed next to this player, copied verbatim ("CINCINNATI BENGALS"). Nothing else. Read only — never recall.',
+              "The NFL team printed next to this player on the graphic or in the article. Read only — never recall. Omit if none is shown.",
           },
         },
         required: ["label", "sport", "strength", "isPlayerProp", "confidence"],
@@ -184,7 +198,7 @@ Then LEAVE gameId EMPTY for NFL props. A separate step resolves the player again
 Other sports have no roster step. For them, set gameId only when the post itself names the player's team and that team is in a supplied game; otherwise leave it empty.
 
 There is one thing you may report about teams and one you may not:
-- READING is fine. Pick cards nearly always print the team above the player ("GREEN BAY PACKERS"). If you can see it, copy just that team name into statedTeam — no commentary, no other fields. It is decisive for telling Kyren Williams from Javonte Williams.
+- READING is fine. Pick cards nearly always print the team above the player ("GREEN BAY PACKERS"). If you can see an NFL team, set statedTeam to it. It is decisive for telling Kyren Williams from Javonte Williams.
 - RECALLING is not. If the graphic does not show a team, omit statedTeam. Never fill it from memory of who a player used to be on. Rosters change every season, what you remember is very likely stale, and a wrong team files the bet under the wrong game. Omitting it is always safe; guessing is not.
 
 Do NOT flag a team assignment as an error in the graphic, and do not "correct" one. You cannot know current rosters — players you remember elsewhere have been traded. A real run of this prompt warned that "George Pickens listed under Dallas Cowboys" looked wrong; he plays for Dallas. Those warnings are false and they make the user distrust correct picks. Transcribe the team as printed and let the downstream lookup be the judge.
@@ -432,8 +446,9 @@ export async function extractPicks(opts: {
     { text: JSON.stringify(context, null, 2) },
   ];
 
-  let lastEmptyReason = "";
-  const callModel = async (pinTemperature: boolean): Promise<Extraction | null> => {
+  // Why the last attempt produced nothing usable, for the error message.
+  let lastFailure = "";
+  const callModel = async (): Promise<Extraction | null> => {
     const res = await ai.models.generateContent({
       model: MODEL,
       contents: [{ role: "user", parts }],
@@ -441,11 +456,9 @@ export async function extractPicks(opts: {
         systemInstruction: nfl ? NFL_SYSTEM_PROMPT : SYSTEM_PROMPT,
         responseMimeType: "application/json",
         responseJsonSchema: nfl ? NFL_EXTRACTION_SCHEMA : EXTRACTION_SCHEMA,
-        // NFL tries the setting it was proven on first. Otherwise no override:
-        // Gemini 3 is tuned for the default 1.0, and Google warns lower values
-        // cause looping — at 0 the multi-sport prompt spiralled inside
-        // statedTeam on a cheat sheet and closed the array after one pick.
-        ...(pinTemperature ? { temperature: 0 } : {}),
+        // No temperature override. Gemini 3 is tuned for the default 1.0 and
+        // Google warns lower values cause looping — every failed cheat-sheet
+        // import in Nov 2026 ran at 0, NFL prompt and multi-sport alike.
         // A 4-page cheat sheet can yield 40+ picks; the default output cap would
         // truncate mid-array and the JSON.parse would fail.
         maxOutputTokens: 16384,
@@ -455,25 +468,27 @@ export async function extractPicks(opts: {
     const raw = res.text;
     if (!raw) {
       // Usually MAX_TOKENS: a looping run burns the whole budget thinking and
-      // never writes the answer. Recorded so the error message says which.
-      lastEmptyReason = res.candidates?.[0]?.finishReason ?? res.promptFeedback?.blockReason ?? "unknown";
+      // never writes the answer.
+      lastFailure = `no text (${res.candidates?.[0]?.finishReason ?? res.promptFeedback?.blockReason ?? "unknown"})`;
       return null;
     }
 
-    // responseMimeType makes malformed JSON unlikely, not impossible.
+    // A looping run that hits the token cap mid-string comes back truncated,
+    // so unparseable JSON is the same failure as no text — worth a retry.
     try {
       return JSON.parse(raw);
     } catch {
-      throw new Error(`Model returned unparseable JSON: ${raw.slice(0, 300)}`);
+      lastFailure = `cut off (${res.candidates?.[0]?.finishReason ?? "unknown"})`;
+      return null;
     }
   };
 
   // Gemini's free tier 503s under load ("high demand"). Those clear in
   // seconds, so wait and try again rather than failing the import.
-  const generate = async (pinTemperature: boolean): Promise<Extraction | null> => {
+  const generate = async (): Promise<Extraction | null> => {
     for (let attempt = 0;; attempt++) {
       try {
-        return await callModel(pinTemperature);
+        return await callModel();
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         if (/\b429\b|RESOURCE_EXHAUSTED/.test(msg)) {
@@ -488,15 +503,16 @@ export async function extractPicks(opts: {
   };
 
   // A degenerate run either leaks its reasoning into a short field and stops
-  // early (a 300-char statedTeam, one pick) or loops until the token budget is
-  // gone and returns nothing. Retry once at the default temperature; if it
-  // happens again, keep what we got but drop the junk team so it can't steer
-  // the roster lookup.
-  let parsed = await generate(nfl);
+  // early (one pick), or loops until the token budget is gone and returns
+  // nothing or a truncated answer. Sampling differs run to run, so retry once;
+  // if it happens again, keep what we got but drop the junk team so it can't
+  // steer the roster lookup. Each attempt costs one of the free tier's daily
+  // requests, which is why it's only once.
+  let parsed = await generate();
   const warnings: string[] = [];
   if (!parsed || hasRunawayField(parsed)) {
-    parsed = await generate(false) ?? parsed;
-    if (!parsed) throw new Error(`Model returned no text (${lastEmptyReason})`);
+    parsed = await generate() ?? parsed;
+    if (!parsed) throw new Error(`Couldn't read that post — the model's answer was ${lastFailure}. Try again.`);
     if (hasRunawayField(parsed)) {
       warnings.push("The model's output looked garbled — some picks may be missing. Try importing again.");
     }

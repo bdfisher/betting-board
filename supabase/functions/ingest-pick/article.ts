@@ -6,7 +6,7 @@
 // headless browser needed. If a site starts blocking us (or moves the content
 // behind client-side JS) we fall back to the r.jina.ai reader. Like
 // fxtwitter.ts, every failure degrades to "no text" rather than throwing, so
-// the caller still writes an inbox row.
+// the caller can report what went wrong.
 
 const TIMEOUT_MS = 12000;
 

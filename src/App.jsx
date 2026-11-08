@@ -151,8 +151,8 @@ const chipStyle = (hex) => ({ color: hex, backgroundColor: `${hex}22`, borderCol
 
 // Sports we show the spread for (favorite only); everything else shows both moneylines.
 const SPREAD_SPORTS = new Set(["NFL", "NCAAF"]);
-// Sports the import field offers. Auto lets the extractor read it off the post.
-const INGEST_SPORTS = [[null, "Auto"], ...LEAGUES.filter((l) => l !== "Other").map((l) => [l, l])];
+// Sports the import field offers. One is always chosen — it picks the prompt.
+const INGEST_SPORTS = LEAGUES.filter((l) => l !== "Other");
 const fmtSpread = (n) => (n === 0 ? "PK" : n > 0 ? `+${n}` : `${n}`);
 
 // Plain matchup for the header's top line (truncatable). Falls back to the stored
@@ -996,7 +996,7 @@ export default function BetBoard() {
   // is open. Held only in memory — closing the sheet discards it.
   const [importReview, setImportReview] = useState(null);
   const [ingestUrlText, setIngestUrlText] = useState("");
-  const [ingestSport, setIngestSport] = useState(null); // null = let the model detect it
+  const [ingestSport, setIngestSport] = useState("NFL");
   const [ingesting, setIngesting] = useState(false);
   const [ingestStatus, setIngestStatus] = useState(null); // { ok, message }
 
@@ -2329,13 +2329,13 @@ export default function BetBoard() {
               </label>
               <div className="flex gap-2">
                 <select
-                  value={ingestSport ?? ""}
-                  onChange={(e) => setIngestSport(e.target.value || null)}
+                  value={ingestSport}
+                  onChange={(e) => setIngestSport(e.target.value)}
                   aria-label="Sport"
                   className="flex-shrink-0 w-24 bg-[#282a36] border border-[#44475a] rounded-lg px-2 py-2.5 text-sm"
                 >
-                  {INGEST_SPORTS.map(([key, label]) => (
-                    <option key={label} value={key ?? ""}>{label}</option>
+                  {INGEST_SPORTS.map((l) => (
+                    <option key={l} value={l}>{l}</option>
                   ))}
                 </select>
                 <input
