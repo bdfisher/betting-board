@@ -171,11 +171,11 @@ export default function ImportReview({ post, games, sources, onClose, onAccept }
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 p-3"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md bg-[#282a36] border border-[#44475a] rounded-xl p-4 space-y-3 max-h-[88dvh] overflow-y-auto"
+        className="w-full max-w-md bg-[#282a36] border border-[#44475a] rounded-xl p-4 space-y-3 max-h-[88dvh] overflow-y-auto overscroll-contain"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Review imported picks"

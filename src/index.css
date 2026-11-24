@@ -17,13 +17,27 @@ select {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Dark-only app: native controls (date picker, select menus, scrollbars)
+   render dark, and landscape rotation doesn't inflate font sizes. */
+html {
+  color-scheme: dark;
+  -webkit-text-size-adjust: 100%;
+}
+
 /* Buttons: kill the iOS double-tap-to-zoom gesture (so rapid toggling of
    star/check/collapse never zooms the page) and prevent the label text from
    being selected on long-press / fast taps. */
-button {
+button,
+[role="button"],
+a,
+label {
   touch-action: manipulation;
+}
+button,
+[role="button"] {
   user-select: none;
   -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* Dark background everywhere so the notch / status-bar / overscroll areas
@@ -36,9 +50,12 @@ body,
   background-color: #282a36;
 }
 
-/* Let content paint into the notch / status-bar area (viewport-fit=cover). */
+/* No pull-to-refresh or page rubber-band: the app owns its scroll. Must be on
+   html too - that's the element iOS actually bounces. Inner scrollers (sheets,
+   dropdowns) use overscroll-contain so they keep their own bounce. */
+html,
 body {
-  overscroll-behavior-y: none;
+  overscroll-behavior: none;
 }
 
 /* Safe-area helpers for the fixed bottom nav and bottom-pinned UI. */
