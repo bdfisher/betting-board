@@ -122,7 +122,7 @@ export default function AuthGate({ children }) {
                     setErrorMsg("");
                     setStatus("idle");
                   }}
-                  className="text-xs font-semibold text-[#bd93f9] hover:text-[#ff79c6] active:text-[#ff79c6]"
+                  className="text-xs font-semibold text-[#bd93f9] hover:text-[#ff79c6]"
                 >
                   {authMode === "sign-in" ? "Create account" : "Sign in"}
                 </button>
@@ -185,7 +185,7 @@ export default function AuthGate({ children }) {
                       type="button"
                       onClick={sendMagicLink}
                       disabled={!email.trim() || status === "submitting"}
-                      className="text-xs font-semibold text-[#8be9fd] hover:text-[#f8f8f2] active:text-[#f8f8f2]"
+                      className="text-xs font-semibold text-[#8be9fd] hover:text-[#f8f8f2]"
                     >
                       Send a magic link instead
                     </button>

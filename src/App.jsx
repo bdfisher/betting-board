@@ -428,7 +428,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                 {pickSources.length}×
               </span>
             )}
-            <input enterKeyHint="done"
+            <input
               autoFocus
               value={editingLabel}
               onChange={(e) => setEditingLabel(e.target.value)}
@@ -624,7 +624,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
               </div>
               {srcDropOpen && (
                 <>
-                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto overscroll-contain max-h-56">
+                  <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-56">
                     {sources
                       .filter((s) => {
                         const alreadyOn = (pick.sources || []).some((ps) => ps.sourceId === s.id);
@@ -644,7 +644,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                               setSrcSearch("");
                               setSrcDropOpen(false);
                             }}
-                            className="w-full flex items-center justify-between px-3 py-2 text-xs text-left border-b border-[#44475a] last:border-0 text-[#f8f8f2] hover:bg-[#21222c] active:bg-[#21222c]"
+                            className="w-full flex items-center justify-between px-3 py-2 text-xs text-left border-b border-[#44475a] last:border-0 text-[#f8f8f2] hover:bg-[#21222c]"
                           >
                             <span>{s.name}</span>
                             <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
@@ -683,9 +683,9 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
 
       {/* Rung editor modal */}
       {rungModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-3"
           onClick={() => setRungModal(null)}>
-          <div className="w-full max-w-md bg-[#343746] border border-[#44475a] rounded-xl p-4 space-y-3 max-h-[85dvh] overflow-y-auto overscroll-contain"
+          <div className="w-full max-w-md bg-[#343746] border border-[#44475a] rounded-xl p-4 space-y-3 max-h-[85dvh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <span className="text-sm font-semibold text-[#f8f8f2]">{rungModal.rungId ? "Edit rung" : "Add rung"}</span>
@@ -695,7 +695,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
             {/* Rung label */}
             <div>
               <label className="text-[10px] uppercase tracking-wide text-[#6272a4]">Rung</label>
-              <input enterKeyHint="done" value={rungModal.label} autoFocus
+              <input value={rungModal.label} autoFocus
                 onChange={(e) => setRungModal({ ...rungModal, label: e.target.value })}
                 onKeyDown={(e) => { if (e.key === "Enter") saveRung(); }}
                 autoCorrect="off" spellCheck={false} autoComplete="off"
@@ -758,7 +758,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                       onMouseDown (not onClick) keeps the input focused so picks register
                       before the input's onBlur can close the list. */}
                   {rungDropOpen && (
-                    <div className="mt-1 bg-[#21222c] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto overscroll-contain max-h-52">
+                    <div className="mt-1 bg-[#21222c] border border-[#6272a4] rounded-lg shadow-xl overflow-y-auto max-h-52">
                       {sources
                         .filter((s) => s.name.toLowerCase().includes(rungModal.search.toLowerCase()))
                         .sort((a, b) => (TIER_EDGE[getSourceTier(b, sport)] || 0) - (TIER_EDGE[getSourceTier(a, sport)] || 0))
@@ -773,7 +773,7 @@ function PickCard({ pick, sport, games = [], sources, sourcesMap, expandedPickId
                                 active ? next.delete(s.id) : next.add(s.id);
                                 setRungModal({ ...rungModal, sourceIds: next, search: "" });
                               }}
-                              className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 ${active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#282a36] active:bg-[#282a36]"}`}>
+                              className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 ${active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#282a36]"}`}>
                               <span>{s.name}</span>
                               <div className="flex items-center gap-2">
                                 <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${TIER_BADGE_CLASS[tier]}`}>{tier}</span>
@@ -1769,7 +1769,7 @@ export default function BetBoard() {
         <td className="px-2 py-1.5">
           <div className="h-7 flex items-center min-w-0">
             {isEditingName ? (
-              <input enterKeyHint="done" autoFocus value={editingPromoCellValue}
+              <input autoFocus value={editingPromoCellValue}
                 onChange={(e) => setEditingPromoCellValue(e.target.value)}
                 onBlur={() => { updatePromoField(p.id, "name", editingPromoCellValue.trim() || p.name); setEditingPromoCell(null); }}
                 onKeyDown={(e) => {
@@ -1820,7 +1820,7 @@ export default function BetBoard() {
         </td>
         <td className="px-2 py-1.5">
           <div className="h-7 flex items-center min-w-0">
-            <input enterKeyHint="done" value={newPromoName}
+            <input value={newPromoName}
               onChange={(e) => setNewPromoName(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") commitNewPromo(); }}
               placeholder="New promo…"
@@ -2137,8 +2137,6 @@ export default function BetBoard() {
 
   return (
     <div className="min-h-[100dvh] bg-[#282a36] text-[#f8f8f2] pb-[calc(6rem+env(safe-area-inset-bottom))]">
-      {/* Opaque strip under the status bar (black-translucent when installed) so the board never scrolls beneath the clock; the sticky filter pins just below it. */}
-      <div aria-hidden className="fixed top-0 inset-x-0 h-[env(safe-area-inset-top)] bg-[#282a36] z-40 pointer-events-none" />
       <div className={`px-4 pt-[max(0.875rem,env(safe-area-inset-top))] pb-3 border-b border-[#44475a] ${shellWidth} mx-auto flex items-baseline justify-between gap-2`}>
         <h1 className="text-xl font-bold tracking-tight text-[#f8f8f2]">The Notebook</h1>
         <button onClick={refreshOdds} disabled={refreshingOdds}
@@ -2159,7 +2157,7 @@ export default function BetBoard() {
             ) : (
               <>
                 {/* ── Board filter — pinned so it stays reachable while scrolling a long slate ── */}
-                <div className="sticky top-[env(safe-area-inset-top)] z-10 -mx-4 px-4 py-2 bg-[#282a36]">
+                <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-[#282a36]">
                   <div className="flex rounded-lg border border-[#44475a] text-xs overflow-hidden w-max">
                     {BOARD_FILTERS.map(([v, l]) => (
                       <button key={v} onClick={() => changeBoardFilter(v)} aria-pressed={boardFilter === v}
@@ -2340,7 +2338,7 @@ export default function BetBoard() {
                     <option key={l} value={l}>{l}</option>
                   ))}
                 </select>
-                <input enterKeyHint="go"
+                <input
                   type="url"
                   inputMode="url"
                   value={ingestUrlText}
@@ -2423,7 +2421,7 @@ export default function BetBoard() {
                     .sort(byGameDateTime);
                   return (
                     <div className="mt-1 rounded-lg border border-[#44475a] overflow-hidden">
-                      <div className="max-h-[15rem] overflow-y-auto overscroll-contain divide-y divide-[#44475a]">
+                      <div className="max-h-[15rem] overflow-y-auto divide-y divide-[#44475a]">
                         {gamesForSport.length === 0 ? (
                           <div className="px-3 py-3 text-sm text-[#6272a4]">No games yet. Import from the buttons above or add one below.</div>
                         ) : gamesForSport.map((g) => {
@@ -2536,7 +2534,7 @@ export default function BetBoard() {
                             >{STRENGTH[sKey].label}</button>
                             <button
                               onClick={(e) => { e.stopPropagation(); setSelectedSourceIds((prev) => { const n = new Set(prev); n.delete(id); return n; }); setSourceStrengths((prev) => { const n = { ...prev }; delete n[id]; return n; }); }}
-                              className="text-[#50fa7b] hover:text-[#69ff94] active:text-[#69ff94] leading-none text-sm px-1.5 py-1 -my-1 -mr-1.5"
+                              className="text-[#50fa7b] hover:text-[#69ff94] leading-none text-sm px-1.5 py-1 -my-1 -mr-1.5"
                               aria-label={`Remove ${src.name}`}
                             >×</button>
                           </span>
@@ -2555,7 +2553,7 @@ export default function BetBoard() {
 
                     {/* Dropdown list */}
                     {sourceDropdownOpen && (
-                      <div className="absolute z-20 mt-1 w-full bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-hidden max-h-52 overflow-y-auto overscroll-contain">
+                      <div className="absolute z-20 mt-1 w-full bg-[#343746] border border-[#6272a4] rounded-lg shadow-xl overflow-hidden max-h-52 overflow-y-auto">
                         {sources
                           .filter((s) => s.name.toLowerCase().includes(sourceSearch.toLowerCase()))
                           .sort((a, b) => {
@@ -2581,7 +2579,7 @@ export default function BetBoard() {
                                   setSourceDropdownOpen(false);
                                 }}
                                 className={`w-full flex items-center justify-between px-3 py-2.5 text-sm text-left border-b border-[#44475a] last:border-0 transition-colors ${
-                                  active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#21222c] active:bg-[#21222c]"
+                                  active ? "bg-[#50fa7b]/10 text-[#50fa7b]" : "text-[#f8f8f2] hover:bg-[#21222c]"
                                 }`}
                               >
                                 <span>{s.name}</span>
@@ -2701,7 +2699,7 @@ export default function BetBoard() {
             <div>
               <label className="text-xs uppercase tracking-wide text-[#6272a4]">Add sources</label>
               <div className="mt-1 flex gap-2">
-                <input enterKeyHint="done" type="text" value={newSourceName} onChange={(e) => setNewSourceName(e.target.value)}
+                <input type="text" value={newSourceName} onChange={(e) => setNewSourceName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && addSource()}
                   autoCapitalize="off" autoCorrect="off" spellCheck={false} autoComplete="off"
                   placeholder="One name or handle"
@@ -2803,7 +2801,7 @@ export default function BetBoard() {
             <div>
               <label className="text-xs uppercase tracking-wide text-[#6272a4]">Sportsbooks</label>
               <div className="mt-1 flex gap-2">
-                <input enterKeyHint="done" type="text" value={newBookName} onChange={(e) => setNewBookName(e.target.value)}
+                <input type="text" value={newBookName} onChange={(e) => setNewBookName(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && addBook()}
                   autoCapitalize="words" autoCorrect="off" spellCheck={false}
                   placeholder="e.g. DraftKings"
@@ -2839,7 +2837,7 @@ export default function BetBoard() {
               <button
                 type="button"
                 onClick={() => setSourceExportOpen((open) => !open)}
-                className="w-full flex items-center justify-between px-3 py-3 text-sm font-semibold text-[#f8f8f2] hover:bg-[#2a2d44] active:bg-[#2a2d44]"
+                className="w-full flex items-center justify-between px-3 py-3 text-sm font-semibold text-[#f8f8f2] hover:bg-[#2a2d44]"
               >
                 <span>Source import/export</span>
                 <span className="text-[#6272a4]">{sourceExportOpen ? "Hide" : "Show"}</span>
@@ -2987,9 +2985,9 @@ export default function BetBoard() {
 
       {/* Scoring help modal */}
       {showHelp && (
-        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 p-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))]"
+        <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/60 p-3"
           onClick={() => setShowHelp(false)}>
-          <div className="w-full max-w-md bg-[#343746] border border-[#44475a] rounded-xl p-4 space-y-4 max-h-[80dvh] overflow-y-auto overscroll-contain"
+          <div className="w-full max-w-md bg-[#343746] border border-[#44475a] rounded-xl p-4 space-y-4 max-h-[80dvh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between">
               <span className="text-sm font-bold text-[#f8f8f2]">How scoring works</span>

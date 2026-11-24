@@ -208,7 +208,7 @@ export default function AddPickAutofill({ selectedSport, onImportGames }) {
               {allSelected ? "Deselect all" : "Select all"}
             </button>
           </div>
-          <div className="grid gap-1 max-h-48 overflow-y-auto overscroll-contain">
+          <div className="grid gap-1 max-h-48 overflow-y-auto">
             {games.map((g) => {
               const isSelected = selectedIds.has(g.id);
               return (
